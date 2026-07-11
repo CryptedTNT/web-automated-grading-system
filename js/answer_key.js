@@ -32,14 +32,14 @@ const AnswerKey = (() => {
         <div class="page-title">Answer Key Management</div>
         <div class="page-subtitle">Create, save, and reuse answer keys.</div>
       </div>
-      <div class="flex gap-16" style="align-items:flex-start;">
-        <div class="card flex-1">
+      <div class="workflow-layout">
+        <div class="card workflow-sidebar">
           <div class="card-title">Saved Answer Keys</div>
           <button class="btn btn-primary w-full mb-8" id="ak-new-btn" title="Create a new answer key.">+ New Answer Key</button>
           <div class="list-widget" id="ak-list">${listItems || '<div class="list-item muted-text">No answer keys yet.</div>'}</div>
           <button class="btn btn-danger w-full mt-8" id="ak-delete-key-btn" title="Delete the selected answer key.">Delete Answer Key</button>
         </div>
-        <div class="card flex-3">
+        <div class="card workflow-main">
           <div class="card-title">Answer Key Details</div>
           <div class="form-group">
             <label class="form-label">Answer Key Name</label>

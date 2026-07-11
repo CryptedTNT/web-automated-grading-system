@@ -10,7 +10,7 @@ const Auth = (() => {
         <div class="hero-icon">▣</div>
         <div class="hero-title">Automated<br>Grading System</div>
         <div class="hero-subtitle">For Handwritten Objective<br>Examinations</div>
-        <div class="hero-footer">${footerText || 'Web-based prototype • HTML / CSS / JS'}</div>
+        <div class="hero-footer">${footerText || 'Web-based prototype'}</div>
       </div>`;
   }
 

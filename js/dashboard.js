@@ -58,8 +58,8 @@ const Dashboard = (() => {
         </div>
       </div>
 
-      <div class="flex gap-16" style="align-items:flex-start;">
-        <div class="card flex-3">
+      <div class="workflow-layout">
+        <div class="card workflow-main">
           <div class="card-title">Recent Grading Sessions</div>
           <div class="table-wrapper">
             <table>
@@ -68,7 +68,7 @@ const Dashboard = (() => {
             </table>
           </div>
         </div>
-        <div class="card flex-1">
+        <div class="card workflow-sidebar">
           <div class="card-title">Quick Actions</div>
           <div class="flex flex-col gap-8">
             <button class="btn btn-primary w-full" id="dash-new-key" title="Create or edit an answer key.">New Answer Key</button>

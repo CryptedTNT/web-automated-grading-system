@@ -1,144 +1,208 @@
 /* ============================================================
-   review.js — Review flagged items
+   review.js - Manual review progression for flagged items
    ============================================================ */
 
 const Review = (() => {
   let currentItem = null;
+  let notice = '';
+  let lastReviewedResultId = null;
+  let reviewSessionId = null;
 
-  function render() { /* rendered in refresh */ }
+  function render() { /* rendered by refresh */ }
 
   function refresh() {
     const el = document.getElementById('page-review');
     if (!el) return;
 
-    const rid = App.state.selectedStudentResultId;
-    const sid = App.state.currentSessionId;
-    let item = DB.getFirstFlaggedItem(rid, sid);
-    currentItem = item;
+    const sessionId = App.state.currentSessionId;
+    if (reviewSessionId !== sessionId) {
+      reviewSessionId = sessionId;
+      lastReviewedResultId = null;
+      notice = '';
+    }
+    const selectedResult = App.state.selectedStudentResultId
+      ? DB.getStudentResultById(App.state.selectedStudentResultId)
+      : null;
+    const validResultId = selectedResult?.session_id === sessionId ? selectedResult.id : null;
+    currentItem = DB.getFirstFlaggedItem(validResultId, sessionId);
 
-    if (!item) {
-      el.innerHTML = `
-        <div class="title-block">
-          <div class="page-title">Review Flagged Answer</div>
-          <div class="page-subtitle">Manual override workflow</div>
-        </div>
-        <div class="flex gap-16" style="align-items:flex-start;">
-          <div class="card flex-2">
-            <div class="card-title">Extracted Answer Recognition Details</div>
-            <div class="muted-text" style="padding:24px;text-align:center;">No flagged answers found.</div>
-          </div>
-          <div class="card flex-1">
-            <div class="card-title">Choose Action</div>
-            <button class="btn btn-secondary w-full" id="rev-back-btn">Back to Results</button>
-          </div>
-        </div>`;
-      document.getElementById('rev-back-btn')?.addEventListener('click', () => App.showPage('results'));
+    if (!currentItem) {
+      _renderComplete(el, sessionId);
       return;
     }
 
-    const autoStatus = item.auto_status || item.status;
-    const finalStatus = item.status;
-    const manual = item.manual_override ? true : false;
-    const action = item.override_action || '';
+    const result = DB.getStudentResultById(currentItem.student_result_id);
+    App.state.selectedStudentResultId = result?.id || null;
+    const autoStatus = currentItem.auto_status || currentItem.status;
 
     el.innerHTML = `
       <div class="title-block">
         <div class="page-title">Review Flagged Answer</div>
-        <div class="page-subtitle">Manual override workflow</div>
+        <div class="page-subtitle">Session #${sessionId || '-'} - ${_esc(result?.student_name || 'Unknown Student')} - Item ${currentItem.item_no}</div>
       </div>
-      <div class="flex gap-16" style="align-items:flex-start;">
-        <div class="card flex-2">
-          <div class="card-title">Extracted Answer Recognition Details</div>
-          <div class="muted-text mb-8">Question #: ${item.item_no} &nbsp;•&nbsp; Question Type: ${item.type}</div>
-          <div class="muted-text mb-8">Auto Result: <span class="badge ${autoStatus === 'Flagged' ? 'badge-warning' : 'badge-gray'}">${autoStatus}</span> &nbsp;•&nbsp; Final Result: <span class="badge ${finalStatus === 'Flagged' ? 'badge-warning' : finalStatus === 'OK' ? 'badge-success' : 'badge-danger'}">${finalStatus}</span></div>
-          ${manual ? `<div class="muted-text mb-8">Manual Override: ${action || 'applied'}</div>` : ''}
+
+      ${notice ? `<div class="inline-notice success-notice">${_esc(notice)}</div>` : ''}
+
+      <div class="workflow-layout review-layout">
+        <section class="card workflow-main">
+          <div class="review-meta">
+            <span class="badge badge-warning">Flagged</span>
+            <span>${_esc(currentItem.type || 'Question')}</span>
+            ${currentItem.enum_group ? `<span>Group ${_esc(currentItem.enum_group)}</span>` : ''}
+          </div>
           <div class="comparison-row">
             <div class="comparison-card">
               <div class="card-title">Extracted Answer</div>
-              <div class="big-answer">${item.student_answer || '[blank]'}</div>
+              <div class="big-answer">${_esc(currentItem.student_answer || '[blank]')}</div>
             </div>
             <div class="comparison-card">
               <div class="card-title">Correct Answer</div>
-              <div class="big-answer">${item.correct_answer || ''}</div>
+              <div class="big-answer">${_esc(currentItem.correct_answer || '[not set]')}</div>
             </div>
           </div>
-          <div class="muted-text mt-8">Match: ${item.match_score}% &nbsp;•&nbsp; Model: ${item.model_used || 'N/A'}</div>
-          ${item.remarks ? `<div class="muted-text mt-8">Remarks: ${item.remarks}</div>` : ''}
-        </div>
-        <div class="card flex-1">
+          <dl class="review-details">
+            <div><dt>Automatic result</dt><dd><span class="badge ${_statusClass(autoStatus)}">${_esc(autoStatus)}</span></dd></div>
+            <div><dt>Match score</dt><dd>${_number(currentItem.match_score)}%</dd></div>
+            <div><dt>Points</dt><dd>${_number(currentItem.points)}</dd></div>
+            <div><dt>Model</dt><dd>${_esc(currentItem.model_used || 'Not recorded')}</dd></div>
+          </dl>
+          ${currentItem.remarks ? `<div class="remarks-box"><strong>Remarks</strong><span>${_esc(currentItem.remarks)}</span></div>` : ''}
+        </section>
+
+        <aside class="card workflow-sidebar">
           <div class="card-title">Choose Action</div>
-          <div class="radio-group mb-14">
+          <div class="radio-group" id="review-actions">
             <label><input type="radio" name="rev-action" value="accept"> Accept as correct</label>
             <label><input type="radio" name="rev-action" value="wrong"> Mark as incorrect</label>
-            <label><input type="radio" name="rev-action" value="override" checked> Override manually</label>
+            <label><input type="radio" name="rev-action" value="override" checked> Override extracted answer</label>
           </div>
-          <label class="form-label">Manual Override Input</label>
-          <input type="text" id="rev-override" value="${_esc(item.correct_answer)}" title="Enter the manual override answer.">
-          <div class="spacer" style="min-height:20px;"></div>
-          <button class="btn btn-primary w-full" id="rev-save-btn">Save Override</button>
-        </div>
+          <div class="form-group mt-14">
+            <label class="form-label" for="rev-override">Manual Answer</label>
+            <input type="text" id="rev-override" value="${_esc(currentItem.correct_answer)}">
+          </div>
+          <div class="workflow-actions vertical-actions">
+            <button class="btn btn-primary w-full" id="rev-save-btn">Save and Continue</button>
+            <button class="btn btn-secondary w-full" id="rev-back-btn">Back to Results</button>
+          </div>
+        </aside>
       </div>
     `;
 
-    document.getElementById('rev-save-btn')?.addEventListener('click', saveOverride);
+    notice = '';
+    el.querySelectorAll('input[name="rev-action"]').forEach(input => input.addEventListener('change', _syncManualInput));
+    el.querySelector('#rev-save-btn')?.addEventListener('click', saveOverride);
+    el.querySelector('#rev-back-btn')?.addEventListener('click', () => App.showPage('results'));
   }
 
-  function _esc(val) {
-    return String(val || '').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  function _renderComplete(el, sessionId) {
+    const title = lastReviewedResultId ? 'Review Complete' : 'No Flagged Answers';
+    const message = lastReviewedResultId
+      ? 'All flagged items in this session have been reviewed.'
+      : 'There are no flagged items in the selected session.';
+    el.innerHTML = `
+      <div class="title-block">
+        <div class="page-title">${title}</div>
+        <div class="page-subtitle">Session #${sessionId || '-'}</div>
+      </div>
+      <section class="card review-complete">
+        <div class="completion-mark" aria-hidden="true">&#10003;</div>
+        <div class="section-title">${message}</div>
+        <div class="muted-text mt-8">Scores and flagged counts reflect the latest manual decisions.</div>
+        <div class="workflow-actions justify-center">
+          <button class="btn btn-primary" id="rev-results-btn">Back to Results</button>
+          ${lastReviewedResultId ? '<button class="btn btn-secondary" id="rev-student-btn">Open Last Student</button>' : ''}
+        </div>
+      </section>`;
+    el.querySelector('#rev-results-btn')?.addEventListener('click', () => App.showPage('results'));
+    el.querySelector('#rev-student-btn')?.addEventListener('click', () => {
+      App.state.selectedStudentResultId = lastReviewedResultId;
+      App.showPage('student_result');
+    });
+  }
+
+  function _syncManualInput() {
+    const action = document.querySelector('input[name="rev-action"]:checked')?.value;
+    const input = document.getElementById('rev-override');
+    if (input) input.disabled = action !== 'override';
   }
 
   async function saveOverride() {
     if (!currentItem) return;
-    const item = currentItem;
-    const originalScore = item.match_score || 0;
-    const originalAuto = item.auto_status || item.status;
-
     const action = document.querySelector('input[name="rev-action"]:checked')?.value || 'override';
-    let earned, status, actionName, remarks, ans = item.student_answer, matchScore = originalScore;
+    const manualInput = document.getElementById('rev-override');
+    const originalAutoStatus = currentItem.auto_status || currentItem.status;
+    const originalMatch = _number(currentItem.match_score);
+    let updates;
 
     if (action === 'accept') {
-      earned = item.points;
-      status = 'OK';
-      actionName = 'accepted_correct';
-      remarks = `Manual override: accepted as correct. Auto result was ${originalAuto} with ${originalScore}% match.`;
+      updates = {
+        earned: _number(currentItem.points),
+        status: 'OK',
+        manual_override: 1,
+        override_action: 'accepted_correct',
+        remarks: `Manual review: accepted as correct. Automatic result was ${originalAutoStatus} at ${originalMatch}% match.`,
+      };
     } else if (action === 'wrong') {
-      earned = 0;
-      status = 'Wrong';
-      actionName = 'marked_incorrect';
-      remarks = `Manual override: marked incorrect. Auto result was ${originalAuto} with ${originalScore}% match.`;
+      updates = {
+        earned: 0,
+        status: 'Wrong',
+        manual_override: 1,
+        override_action: 'marked_incorrect',
+        remarks: `Manual review: marked incorrect. Automatic result was ${originalAutoStatus} at ${originalMatch}% match.`,
+      };
     } else {
-      ans = (document.getElementById('rev-override')?.value || '').trim();
-      earned = item.points;
-      status = 'OK';
-      actionName = 'manual_answer_override';
-      matchScore = 100;
-      remarks = `Manual override: answer changed to '${ans}' and accepted as correct. Auto result was ${originalAuto} with ${originalScore}% match.`;
+      const answer = manualInput?.value.trim() || '';
+      manualInput?.classList.remove('invalid');
+      if (!answer) {
+        manualInput?.classList.add('invalid');
+        await App.showMessage('Manual Answer Required', 'Enter the corrected answer before saving.');
+        manualInput?.focus();
+        return;
+      }
+      updates = {
+        student_answer: answer,
+        earned: _number(currentItem.points),
+        status: 'OK',
+        match_score: 100,
+        manual_override: 1,
+        override_action: 'manual_answer_override',
+        remarks: `Manual review: answer changed to '${answer}' and accepted as correct. Automatic result was ${originalAutoStatus} at ${originalMatch}% match.`,
+      };
     }
 
-    // Update result item
-    DB.updateResultItem(item.id, {
-      student_answer: ans,
-      earned,
-      status,
-      match_score: matchScore,
-      manual_override: 1,
-      override_action: actionName,
-      remarks,
-    });
+    const reviewedResultId = currentItem.student_result_id;
+    DB.updateResultItem(currentItem.id, updates);
+    DB.recalculateStudentResult(reviewedResultId);
+    lastReviewedResultId = reviewedResultId;
 
-    // Recalculate student result totals
-    const rid = item.student_result_id;
-    const items = DB.resultItems(rid);
-    const score = items.reduce((s, x) => s + (parseFloat(x.earned) || 0), 0);
-    const total = items.reduce((s, x) => s + (parseFloat(x.points) || 0), 0);
-    const flagged = items.filter(x => x.status === 'Flagged').length;
-    const pct = total ? Math.round((score / total) * 10000) / 100 : 0;
-    const st = flagged ? 'Flagged' : 'OK';
-    DB.updateStudentResult(rid, { score, total, percentage: pct, flagged_count: flagged, status: st });
+    const nextItem = DB.getFirstFlaggedItem(reviewedResultId, App.state.currentSessionId);
+    if (nextItem) {
+      App.state.selectedStudentResultId = nextItem.student_result_id;
+      notice = 'Review saved. The next flagged item is ready.';
+    } else {
+      App.state.selectedStudentResultId = reviewedResultId;
+      notice = '';
+    }
+    refresh();
+  }
 
-    await App.showMessage('Saved', 'Manual override saved.');
-    App.state.selectedStudentResultId = rid;
-    App.showPage('student_result');
+  function _statusClass(status) {
+    if (status === 'OK') return 'badge-success';
+    if (status === 'Flagged') return 'badge-warning';
+    if (status === 'Wrong') return 'badge-danger';
+    return 'badge-gray';
+  }
+
+  function _number(value) {
+    return Number.isFinite(Number(value)) ? Number(value) : 0;
+  }
+
+  function _esc(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   return { render, refresh };
