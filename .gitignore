@@ -1,0 +1,22 @@
+# Test and scratch files
+scratch/
+
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Temporary files
+temp/
+tmp/

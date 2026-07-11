@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Automated Grading System for Handwritten Objective Examinations — Web-based prototype with answer key management, results review, and Excel export.">
+  <title>Automated Grading System</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <!-- SheetJS CDN for .xlsx export -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <div id="app-root">
+
+    <!-- ======================== AUTH: SETUP ======================== -->
+    <div id="auth-setup" class="auth-view"></div>
+
+    <!-- ======================== AUTH: LOGIN ======================== -->
+    <div id="auth-login" class="auth-view"></div>
+
+    <!-- ======================== AUTH: FORGOT PASSWORD ======================== -->
+    <div id="auth-forgot" class="auth-view"></div>
+
+    <!-- ======================== APP SHELL ======================== -->
+    <div id="shell">
+
+      <!-- Sidebar -->
+      <nav id="sidebar">
+        <div class="sidebar-title">Automated
+Grading System</div>
+        <div class="sidebar-subtitle">Handwritten Objective Exams</div>
+        <div class="sidebar-nav">
+          <button class="sidebar-btn" data-page="dashboard" title="View overall grading statistics and recent system activity.">▦  Dashboard</button>
+          <button class="sidebar-btn" data-page="answer_key" title="Create, edit, save, and delete answer keys.">▣  Answer Keys</button>
+          <button class="sidebar-btn" data-page="upload" title="Upload scanned or captured answer sheet images.">⇧  Upload Sheets</button>
+          <button class="sidebar-btn" data-page="processing" title="Start automated segmentation, OCR, and grading.">⚙  Processing</button>
+          <button class="sidebar-btn" data-page="results" title="View grading session summaries and student scores.">☑  Results</button>
+          <button class="sidebar-btn" data-page="student_result" title="View item-level results for a selected student.">◫  Student Result</button>
+          <button class="sidebar-btn" data-page="review" title="Manually check flagged answers that need teacher review.">⚑  Review Flagged</button>
+          <button class="sidebar-btn" data-page="reports" title="Export grading sessions to Excel.">▤  Reports</button>
+          <button class="sidebar-btn" data-page="how_to_use" title="Open the step-by-step guide for using the system.">?  How to Use</button>
+          <button class="sidebar-btn" data-page="settings" title="Change application display settings.">⚙  Settings</button>
+        </div>
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-user" id="sidebar-user">Teacher: Not signed in</div>
+        <button class="logout-btn" id="logout-btn" title="Sign out and return to the login page.">↩  Logout</button>
+      </nav>
+
+      <!-- Content Area -->
+      <div id="content-root">
+
+        <!-- Top Bar -->
+        <div id="top-bar">
+          <span class="top-title">Automated Grading System</span>
+          <div class="top-spacer"></div>
+          <input type="text" class="top-search" id="top-search"
+                 placeholder="Search student, section, answer key..."
+                 title="Search grading results by student name, section, or answer key.">
+          <span class="top-teacher" id="top-teacher">Teacher: Not signed in</span>
+        </div>
+
+        <!-- Pages Container -->
+        <div id="pages-container">
+          <div class="page" id="page-dashboard"></div>
+          <div class="page" id="page-answer_key"></div>
+          <div class="page" id="page-upload"></div>
+          <div class="page" id="page-processing"></div>
+          <div class="page" id="page-results"></div>
+          <div class="page" id="page-student_result"></div>
+          <div class="page" id="page-review"></div>
+          <div class="page" id="page-reports"></div>
+          <div class="page" id="page-how_to_use"></div>
+          <div class="page" id="page-settings"></div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Scripts (order matters: database first, then modules, then app last) -->
+  <script src="js/database.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/answer_key.js"></script>
+  <script src="js/upload.js"></script>
+  <script src="js/processing.js"></script>
+  <script src="js/results.js"></script>
+  <script src="js/student_result.js"></script>
+  <script src="js/review.js"></script>
+  <script src="js/reports.js"></script>
+  <script src="js/how_to_use.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
