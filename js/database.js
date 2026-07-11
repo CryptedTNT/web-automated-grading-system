@@ -182,6 +182,36 @@ const DB = (() => {
     return { id: user.id, full_name: user.full_name, institution: user.institution, username: user.username, created_at: user.created_at, last_login: user.last_login };
   }
 
+  function updateUserProfile(userId, fullName, institution) {
+    const users = _get('ags_users');
+    const user = users.find(u => u.id === parseInt(userId));
+    if (!user) throw new Error('Teacher account was not found.');
+    fullName = (fullName || '').trim();
+    institution = (institution || '').trim();
+    if (!fullName) throw new Error('Teacher name is required.');
+    user.full_name = fullName;
+    user.institution = institution;
+    _set('ags_users', users);
+    return getUserPublicById(userId);
+  }
+
+  function updateUserPassword(userId, currentPassword, newPassword) {
+    const users = _get('ags_users');
+    const user = users.find(u => u.id === parseInt(userId));
+    if (!user) throw new Error('Teacher account was not found.');
+    if (!_verifyHash(currentPassword || '', user.password_hash, user.salt)) {
+      return false;
+    }
+    if ((newPassword || '').length < 4) {
+      throw new Error('New password must be at least 4 characters.');
+    }
+    const pw = _hashSync(newPassword);
+    user.password_hash = pw.hash;
+    user.salt = pw.salt;
+    _set('ags_users', users);
+    return true;
+  }
+
   function resetPasswordWithSecurityAnswer(username, securityAnswer, newPassword) {
     username = (username || '').trim();
     const users = _get('ags_users');
@@ -382,14 +412,27 @@ const DB = (() => {
     return _get('ags_student_results').find(r => r.id === id) || null;
   }
 
+  function recalculateStudentResult(resultId) {
+    const items = resultItems(resultId);
+    const score = items.reduce((s, x) => s + (parseFloat(x.earned) || 0), 0);
+    const total = items.reduce((s, x) => s + (parseFloat(x.points) || 0), 0);
+    const flagged = items.filter(x => x.status === 'Flagged').length;
+    const pct = total ? Math.round((score / total) * 10000) / 100 : 0;
+    const status = flagged ? 'Flagged' : 'OK';
+    updateStudentResult(resultId, { score, total, percentage: pct, flagged_count: flagged, status });
+    return { score, total, percentage: pct, flagged_count: flagged, status };
+  }
+
   function getFirstFlaggedItem(studentResultId, sessionId) {
-    const items = _get('ags_result_items');
+    const items = _get('ags_result_items').sort((a, b) => (a.item_no - b.item_no) || (a.id - b.id));
     if (studentResultId) {
-      const found = items.find(i => i.student_result_id === studentResultId && i.status === 'Flagged');
+      const found = items.find(i => i.student_result_id === parseInt(studentResultId) && i.status === 'Flagged');
       if (found) return found;
     }
     if (sessionId) {
-      const results = _get('ags_student_results').filter(r => r.session_id === sessionId);
+      const results = _get('ags_student_results')
+        .filter(r => r.session_id === parseInt(sessionId))
+        .sort((a, b) => a.id - b.id);
       for (const r of results) {
         const found = items.find(i => i.student_result_id === r.id && i.status === 'Flagged');
         if (found) return found;
@@ -417,13 +460,55 @@ const DB = (() => {
     _setObj('ags_settings', s);
   }
 
+  const DEFAULT_EXPORT_PREFERENCES = {
+    folder_label: 'Downloads',
+    filename_format: 'grading_session_{session}_{date}.xlsx',
+    include_student_info: true,
+    include_item_scores: true,
+    include_total_score: true,
+    include_flagged_notes: true,
+    include_question_type: true,
+  };
+
+  function getExportPreferences() {
+    const settings = getSettings();
+    const saved = settings.export_preferences || {};
+    return {
+      folder_label: String(saved.folder_label || DEFAULT_EXPORT_PREFERENCES.folder_label),
+      filename_format: String(saved.filename_format || DEFAULT_EXPORT_PREFERENCES.filename_format),
+      include_student_info: typeof saved.include_student_info === 'boolean' ? saved.include_student_info : DEFAULT_EXPORT_PREFERENCES.include_student_info,
+      include_item_scores: typeof saved.include_item_scores === 'boolean' ? saved.include_item_scores : DEFAULT_EXPORT_PREFERENCES.include_item_scores,
+      include_total_score: typeof saved.include_total_score === 'boolean' ? saved.include_total_score : DEFAULT_EXPORT_PREFERENCES.include_total_score,
+      include_flagged_notes: typeof saved.include_flagged_notes === 'boolean' ? saved.include_flagged_notes : DEFAULT_EXPORT_PREFERENCES.include_flagged_notes,
+      include_question_type: typeof saved.include_question_type === 'boolean' ? saved.include_question_type : DEFAULT_EXPORT_PREFERENCES.include_question_type,
+    };
+  }
+
+  function setExportPreferences(preferences) {
+    const incoming = preferences || {};
+    const next = {
+      folder_label: String(incoming.folder_label || DEFAULT_EXPORT_PREFERENCES.folder_label).trim() || DEFAULT_EXPORT_PREFERENCES.folder_label,
+      filename_format: String(incoming.filename_format || DEFAULT_EXPORT_PREFERENCES.filename_format).trim() || DEFAULT_EXPORT_PREFERENCES.filename_format,
+      include_student_info: incoming.include_student_info !== false,
+      include_item_scores: incoming.include_item_scores !== false,
+      include_total_score: incoming.include_total_score !== false,
+      include_flagged_notes: incoming.include_flagged_notes !== false,
+      include_question_type: incoming.include_question_type !== false,
+    };
+    const settings = getSettings();
+    settings.export_preferences = next;
+    _setObj('ags_settings', settings);
+    return next;
+  }
+
   return {
-    hasUser, createUser, verifyUser, getUserByUsername, getUserPublicById, resetPasswordWithSecurityAnswer,
+    hasUser, createUser, verifyUser, getUserByUsername, getUserPublicById,
+    updateUserProfile, updateUserPassword, resetPasswordWithSecurityAnswer,
     createAnswerKey, updateAnswerKey, deleteAnswerKey, answerKeys, answerKeyItems, replaceAnswerKeyItems,
     createSession, updateSessionStatus, sessions, latestSessionId, clearSession,
     addStudentResult, studentResults, addResultItem, resultItems,
-    updateResultItem, updateStudentResult, getStudentResultById, getFirstFlaggedItem,
+    updateResultItem, updateStudentResult, recalculateStudentResult, getStudentResultById, getFirstFlaggedItem,
     dashboardStats,
-    getSettings, setSetting,
+    getSettings, setSetting, getExportPreferences, setExportPreferences,
   };
 })();
