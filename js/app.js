@@ -46,8 +46,11 @@ const App = (() => {
     // Load saved theme
     Settings.loadSavedTheme();
 
+    // Debug tools (no-op unless debug mode is enabled)
+    Debug.init();
+
     // Determine start page
-    _showStartPage();
+    if (!Debug.isEnabled() || !state.currentUser) _showStartPage();
   }
 
   /* ---------- Start Page Logic ---------- */

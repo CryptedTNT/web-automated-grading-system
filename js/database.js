@@ -477,6 +477,22 @@ const DB = (() => {
     return { sheets, sessions: sessCount, flagged, average: avg };
   }
 
+  /* ======================== DEBUG SUPPORT ======================== */
+  const STORAGE_KEYS = [
+    'ags_users', 'ags_answer_keys', 'ags_answer_key_items', 'ags_sessions',
+    'ags_student_results', 'ags_result_items', 'ags_settings',
+  ];
+
+  function resetAllData() {
+    STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
+  }
+
+  function resetGradingData() {
+    STORAGE_KEYS
+      .filter(key => key !== 'ags_users' && key !== 'ags_settings')
+      .forEach(key => localStorage.removeItem(key));
+  }
+
   /* ======================== SETTINGS ======================== */
   function getSettings() { return _getObj('ags_settings'); }
   function setSetting(key, value) {
@@ -536,5 +552,6 @@ const DB = (() => {
     updateResultItem, updateStudentResult, recalculateStudentResult, getStudentResultById, getFirstFlaggedItem,
     dashboardStats,
     getSettings, setSetting, getExportPreferences, setExportPreferences,
+    resetAllData, resetGradingData,
   };
 })();
