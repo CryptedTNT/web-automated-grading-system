@@ -31,7 +31,7 @@ const HowToUse = (() => {
             <table>
               <thead><tr><th>Step</th><th>Task</th><th>Description</th></tr></thead>
               <tbody>
-                <tr><td>1</td><td>Create or log in to a teacher account</td><td>Use the local account stored in browser storage.</td></tr>
+                <tr><td>1</td><td>Create or log in to a teacher account</td><td>Your account is saved in this browser.</td></tr>
                 <tr><td>2</td><td>Create an answer key</td><td>Enter item number, question type, correct answer, points, and group number for enumeration.</td></tr>
                 <tr><td>3</td><td>Upload answer sheets</td><td>Select the answer key and upload scanned or captured examination sheet images.</td></tr>
                 <tr><td>4</td><td>Process the sheets</td><td>The system detects answer regions, recognizes handwriting, and grades the responses. <em>(Placeholder in web app)</em></td></tr>

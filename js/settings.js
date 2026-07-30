@@ -53,7 +53,7 @@ const Settings = (() => {
             <input type="text" id="set-user" value="${_esc(user.username)}" readonly>
           </div>
           ${_passwordField('set-oldpw', 'Current Password', 'Required only when changing the password')}
-          ${_passwordField('set-newpw', 'New Password', 'At least 4 characters')}
+          ${_passwordField('set-newpw', 'New Password', 'New password', true)}
           ${_passwordField('set-confirmpw', 'Confirm New Password', 'Repeat the new password')}
         </div>
         <div class="settings-actions">
@@ -123,6 +123,7 @@ Web frontend with an intentional model-pending processing adapter.</div>
 
     _attachTabs(el);
     _attachPasswordToggles(el);
+    Auth.wirePwRules('set-newpw');
     _attachThemeButtons(el);
     el.querySelector('#set-save-acct')?.addEventListener('click', saveAccount);
     el.querySelector('#set-save-export')?.addEventListener('click', saveExportPreferences);
@@ -135,13 +136,14 @@ Web frontend with an intentional model-pending processing adapter.</div>
     return `<button class="tab-btn ${selected ? 'active' : ''}" data-tab="${id}" role="tab" aria-selected="${selected}">${label}</button>`;
   }
 
-  function _passwordField(id, label, placeholder) {
+  function _passwordField(id, label, placeholder, withRules) {
     return `<div class="form-group">
       <label class="form-label" for="${id}">${label}</label>
       <div class="password-wrapper">
         <input type="password" id="${id}" autocomplete="new-password" placeholder="${placeholder}">
         <button type="button" class="password-toggle" data-target="${id}" aria-label="Show ${label.toLowerCase()}">Show</button>
       </div>
+      ${withRules ? Auth.pwRulesHTML(id) : ''}
     </div>`;
   }
 
@@ -225,9 +227,11 @@ Web frontend with an intentional model-pending processing adapter.</div>
       await App.showMessage('Password Fields Required', 'Complete all three password fields to change the password.');
       return;
     }
-    if (changingPassword && newPassword.length < 4) {
+    const newPwError = changingPassword ? DB.passwordError(newPassword) : null;
+    if (newPwError) {
       newInput?.classList.add('invalid');
-      await App.showMessage('Password Too Short', 'The new password must contain at least 4 characters.');
+      Auth.paintPwRules('set-newpw');
+      await App.showMessage('Weak Password', newPwError);
       return;
     }
     if (changingPassword && newPassword !== confirmPassword) {

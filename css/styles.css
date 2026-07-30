@@ -96,13 +96,17 @@ a:hover { text-decoration: underline; }
 
 .auth-container {
   display: flex;
-  width: 100%; height: 100%;
+  width: 100%;
+  max-width: 1040px;
+  /* auto margins center on both axes and collapse instead of clipping when
+     the content is taller than the viewport */
+  margin: auto;
   gap: 28px;
 }
 
 /* Hero panel (left side of auth) */
 .hero-panel {
-  flex: 2;
+  flex: 1 1 480px;
   background: var(--hero-bg);
   border-radius: var(--radius-xl);
   padding: 34px;
@@ -121,13 +125,16 @@ a:hover { text-decoration: underline; }
 .hero-panel .hero-subtitle {
   font-size: 16px; color: #D9E8F5; margin-bottom: 20px;
 }
+/* Each span is its own line on wide screens, inline when the hero collapses */
+.hero-panel .hero-title span,
+.hero-panel .hero-subtitle span { display: block; }
 .hero-panel .hero-footer {
   margin-top: auto; font-size: 11px; color: #9AB6D1;
 }
 
 /* Auth card (right side) */
 .auth-card {
-  flex: 1;
+  flex: 1 1 420px;
   min-width: 380px; max-width: 460px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -369,6 +376,21 @@ input[type="password"]::-ms-clear {
   color: var(--primary); font-size: 16px; padding: 4px;
 }
 .password-toggle:hover { color: var(--primary-hover); }
+
+/* Live password requirement checklist */
+.pw-rules {
+  list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px;
+}
+.pw-rules li {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.pw-rules li::before { content: "\25CB"; font-size: 11px; }
+.pw-rules li.ok { color: var(--success); }
+.pw-rules li.ok::before { content: "\2713"; }
+.pw-rules li.bad { color: var(--danger); }
+.pw-rules li.bad::before { content: "\2717"; }
 
 .checkbox-row {
   display: flex; align-items: center; gap: 8px;
@@ -674,9 +696,28 @@ table input, table select {
 
 /* ---------- Responsive Helpers ---------- */
 @media (max-width: 960px) {
-  .auth-container { flex-direction: column; }
-  .hero-panel { min-height: 200px; }
-  .auth-card { max-width: 100%; min-width: 0; }
+  /* Stack the auth views and collapse the hero into a compact header strip.
+     .auth-view keeps height:100% + overflow-y:auto — it is the scroll
+     container, since html/body are overflow:hidden. */
+  .auth-container {
+    flex-direction: column;
+    max-width: 520px;
+    gap: 16px;
+  }
+  .hero-panel {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+  .hero-panel .hero-icon { font-size: 24px; margin-bottom: 0; }
+  .hero-panel .hero-title { font-size: 16px; margin-bottom: 0; }
+  .hero-panel .hero-title span { display: inline; }
+  .hero-panel .hero-subtitle,
+  .hero-panel .hero-footer { display: none; }
+  .auth-card { max-width: 100%; min-width: 0; overflow-y: visible; }
   #sidebar { width: 200px; min-width: 200px; }
 }
 

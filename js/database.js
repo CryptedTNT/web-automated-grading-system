@@ -114,6 +114,30 @@ const DB = (() => {
     return hash === expectedHash;
   }
 
+  /* ---------- Password rules (single source of truth) ---------- */
+  const PASSWORD_RULES = [
+    { id: 'length', label: 'At least 8 characters', test: pw => pw.length >= 8 },
+    { id: 'letter', label: 'At least 1 letter', test: pw => /[A-Za-z]/.test(pw) },
+    { id: 'number', label: 'At least 1 number', test: pw => /[0-9]/.test(pw) },
+    { id: 'special', label: 'At least 1 special character', test: pw => /[^A-Za-z0-9]/.test(pw) }
+  ];
+
+  function checkPassword(password) {
+    password = password || '';
+    const results = PASSWORD_RULES.map(rule => ({ id: rule.id, label: rule.label, ok: rule.test(password) }));
+    return {
+      valid: results.every(r => r.ok),
+      failed: results.filter(r => !r.ok),
+      results
+    };
+  }
+
+  function passwordError(password) {
+    const { valid, failed } = checkPassword(password);
+    if (valid) return null;
+    return 'Password must have: ' + failed.map(r => r.label.toLowerCase()).join(', ') + '.';
+  }
+
   /* ======================== USERS ======================== */
   function hasUser() {
     return _get('ags_users').length > 0;
@@ -128,7 +152,8 @@ const DB = (() => {
     if (!fullName) throw new Error('Full name is required.');
     if (!username) throw new Error('Username is required.');
     if (!password) throw new Error('Password is required.');
-    if (password.length < 4) throw new Error('Password must be at least 4 characters.');
+    const pwError = passwordError(password);
+    if (pwError) throw new Error(pwError);
     if (!securityAnswer) throw new Error('Security answer is required.');
 
     const users = _get('ags_users');
@@ -202,9 +227,8 @@ const DB = (() => {
     if (!_verifyHash(currentPassword || '', user.password_hash, user.salt)) {
       return false;
     }
-    if ((newPassword || '').length < 4) {
-      throw new Error('New password must be at least 4 characters.');
-    }
+    const newPwError = passwordError(newPassword);
+    if (newPwError) throw new Error(newPwError);
     const pw = _hashSync(newPassword);
     user.password_hash = pw.hash;
     user.salt = pw.salt;
@@ -218,7 +242,8 @@ const DB = (() => {
     const user = users.find(u => u.username === username);
     if (!user) return false;
     if (!_verifyHash((securityAnswer || '').trim().toLowerCase(), user.security_answer_hash, user.security_answer_salt)) return false;
-    if ((newPassword || '').length < 4) throw new Error('New password must be at least 4 characters.');
+    const resetPwError = passwordError(newPassword);
+    if (resetPwError) throw new Error(resetPwError);
     const pw = _hashSync(newPassword);
     user.password_hash = pw.hash;
     user.salt = pw.salt;
@@ -504,6 +529,7 @@ const DB = (() => {
   return {
     hasUser, createUser, verifyUser, getUserByUsername, getUserPublicById,
     updateUserProfile, updateUserPassword, resetPasswordWithSecurityAnswer,
+    PASSWORD_RULES, checkPassword, passwordError,
     createAnswerKey, updateAnswerKey, deleteAnswerKey, answerKeys, answerKeyItems, replaceAnswerKeyItems,
     createSession, updateSessionStatus, sessions, latestSessionId, clearSession,
     addStudentResult, studentResults, addResultItem, resultItems,

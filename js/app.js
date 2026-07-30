@@ -67,10 +67,10 @@ const App = (() => {
         } catch (e) { /* fall through */ }
       }
       showView('auth-login');
-      Auth.setLoginStatus('Sign in with the local teacher account stored in browser storage.');
+      Auth.setLoginStatus('Sign in with the teacher account saved in this browser.');
     } else {
       showView('auth-setup');
-      Auth.setSetupStatus('No local account found. Create the first teacher account to start.');
+      Auth.setSetupStatus('No account found yet. Create the first teacher account to start.');
     }
   }
 

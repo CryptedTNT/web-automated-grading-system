@@ -24,6 +24,8 @@ Use this checklist to approve frontend completeness and button progression. Real
 - [ ] First launch displays the account setup screen when no local account exists.
 - [ ] Required setup fields prevent an incomplete account submission.
 - [ ] Password and confirmation mismatch displays a clear warning.
+- [ ] Password requirement checklist under the Password field turns green as each rule is met (8+ characters, a letter, a number, a special character).
+- [ ] A password that fails any requirement is rejected with a `Weak Password` message listing the unmet rules.
 - [ ] Show/hide password buttons work for password fields.
 - [ ] `Create Account` saves the local teacher account and proceeds to Login.
 - [ ] Correct username and password open the Dashboard.
@@ -31,6 +33,7 @@ Use this checklist to approve frontend completeness and button progression. Real
 - [ ] `Remember me` restores the signed-in session after reload when selected.
 - [ ] `Forgot password?` opens the password recovery workflow.
 - [ ] Security-answer password reset works with a valid answer.
+- [ ] Password reset enforces the same password requirements as account setup.
 - [ ] `Logout` returns to Login and prevents access to the app shell.
 
 ## 2. Dashboard and Navigation
@@ -156,6 +159,8 @@ Use this checklist to approve frontend completeness and button progression. Real
 - [ ] Password change requires current, new, and confirmation fields.
 - [ ] Incorrect current password prevents the password change.
 - [ ] New password and confirmation must match.
+- [ ] New password must satisfy the same requirements as account setup, shown by the live checklist.
+- [ ] Existing accounts created before these requirements can still sign in; the rules apply only when a password is created or changed.
 - [ ] Updated password works after logout or reload.
 - [ ] `Preview Template` opens a print-ready 20-item answer sheet.
 - [ ] `Print Template` opens the browser print action.

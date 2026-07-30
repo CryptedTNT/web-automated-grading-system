@@ -8,8 +8,8 @@ const Auth = (() => {
     return `
       <div class="hero-panel">
         <div class="hero-icon">▣</div>
-        <div class="hero-title">Automated<br>Grading System</div>
-        <div class="hero-subtitle">For Handwritten Objective<br>Examinations</div>
+        <div class="hero-title"><span>Automated</span> <span>Grading System</span></div>
+        <div class="hero-subtitle"><span>For Handwritten Objective</span> <span>Examinations</span></div>
         <div class="hero-footer">${footerText || 'Web-based prototype'}</div>
       </div>`;
   }
@@ -27,6 +27,36 @@ const Auth = (() => {
         <input type="password" id="${id}" placeholder="${placeholder}" title="${tooltip}">
         <button type="button" class="password-toggle" data-target="${id}" title="Show password">${EYE_OPEN}</button>
       </div>`;
+  }
+
+  const PW_HINT = 'At least 8 characters, with a letter, a number, and a special character.';
+
+  function _pwRulesHTML(inputId) {
+    const items = DB.PASSWORD_RULES.map(
+      rule => `<li data-rule="${rule.id}">${rule.label}</li>`
+    ).join('');
+    return `<ul class="pw-rules" id="${inputId}-rules" aria-live="polite">${items}</ul>`;
+  }
+
+  function _paintPwRules(inputId) {
+    const input = document.getElementById(inputId);
+    const list = document.getElementById(inputId + '-rules');
+    if (!input || !list) return;
+    const value = input.value;
+    DB.checkPassword(value).results.forEach(result => {
+      const li = list.querySelector(`li[data-rule="${result.id}"]`);
+      if (!li) return;
+      li.classList.remove('ok', 'bad');
+      if (result.ok) li.classList.add('ok');
+      else if (value) li.classList.add('bad');
+    });
+  }
+
+  function _wirePwRules(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.addEventListener('input', () => _paintPwRules(inputId));
+    _paintPwRules(inputId);
   }
 
   function _attachToggles(container) {
@@ -68,7 +98,7 @@ const Auth = (() => {
       ${_heroHTML()}
       <div class="auth-card">
         <div class="page-title">Set up your account</div>
-        <div class="muted-text">First launch setup for offline use.</div>
+        <div class="muted-text">Create your teacher account to get started.</div>
         <div class="form-group">${_reqLabel('Full Name')}
           <input type="text" id="setup-fullname" placeholder="Full name" title="Enter the full name of the teacher account owner."></div>
         <div class="form-group">${_reqLabel('Institution')}
@@ -76,7 +106,8 @@ const Auth = (() => {
         <div class="form-group">${_reqLabel('Username')}
           <input type="text" id="setup-username" placeholder="Username" title="Create a local username for signing in."></div>
         <div class="form-group">${_reqLabel('Password')}
-          ${_pwField('setup-password', 'Password', 'Create a password. At least 4 characters.')}</div>
+          ${_pwField('setup-password', 'Password', 'Create a password. ' + PW_HINT)}
+          ${_pwRulesHTML('setup-password')}</div>
         <div class="form-group">${_reqLabel('Confirm Password')}
           ${_pwField('setup-confirm', 'Confirm password', 'Re-type the password to confirm.')}</div>
         <div class="form-group">${_reqLabel('Security Question')}
@@ -94,6 +125,7 @@ const Auth = (() => {
     </div>`;
     _attachToggles(el);
     _clearInvalid(el);
+    _wirePwRules('setup-password');
     document.getElementById('setup-btn').addEventListener('click', submitSetup);
   }
 
@@ -105,15 +137,17 @@ const Auth = (() => {
     }
     const pw = document.getElementById('setup-password').value;
     const confirm = document.getElementById('setup-confirm').value;
+    const pwError = DB.passwordError(pw);
+    if (pwError) {
+      document.getElementById('setup-password').classList.add('invalid');
+      _paintPwRules('setup-password');
+      App.showMessage('Weak Password', pwError);
+      return;
+    }
     if (pw !== confirm) {
       document.getElementById('setup-password').classList.add('invalid');
       document.getElementById('setup-confirm').classList.add('invalid');
       App.showMessage('Password Mismatch', 'Password and confirm password do not match.');
-      return;
-    }
-    if (pw.length < 4) {
-      document.getElementById('setup-password').classList.add('invalid');
-      App.showMessage('Weak Password', 'Use at least 4 characters for this prototype.');
       return;
     }
     try {
@@ -231,7 +265,8 @@ const Auth = (() => {
         <div class="form-group">${_reqLabel('Security Answer')}
           ${_pwField('forgot-answer', 'Security answer', 'Enter the saved security answer.')}</div>
         <div class="form-group">${_reqLabel('New Password')}
-          ${_pwField('forgot-newpw', 'New password', 'At least 4 characters.')}</div>
+          ${_pwField('forgot-newpw', 'New password', PW_HINT)}
+          ${_pwRulesHTML('forgot-newpw')}</div>
         <div class="form-group">${_reqLabel('Confirm New Password')}
           ${_pwField('forgot-confirm', 'Confirm new password', 'Re-type the new password.')}</div>
         <div class="muted-text" id="forgot-status">Enter your username, security answer, and new password.</div>
@@ -244,6 +279,7 @@ const Auth = (() => {
     </div>`;
     _attachToggles(el);
     _clearInvalid(el);
+    _wirePwRules('forgot-newpw');
     // Update question when username changes
     document.getElementById('forgot-username').addEventListener('blur', () => {
       const u = DB.getUserByUsername(document.getElementById('forgot-username').value);
@@ -264,6 +300,13 @@ const Auth = (() => {
     }
     const newPw = document.getElementById('forgot-newpw').value;
     const confirm = document.getElementById('forgot-confirm').value;
+    const newPwError = DB.passwordError(newPw);
+    if (newPwError) {
+      document.getElementById('forgot-newpw').classList.add('invalid');
+      _paintPwRules('forgot-newpw');
+      App.showMessage('Weak Password', newPwError);
+      return;
+    }
     if (newPw !== confirm) {
       document.getElementById('forgot-newpw').classList.add('invalid');
       document.getElementById('forgot-confirm').classList.add('invalid');
@@ -293,5 +336,8 @@ const Auth = (() => {
     App.showView('auth-login');
   }
 
-  return { renderSetup, renderLogin, renderForgot, setLoginStatus, setSetupStatus };
+  return {
+    renderSetup, renderLogin, renderForgot, setLoginStatus, setSetupStatus,
+    PW_HINT, pwRulesHTML: _pwRulesHTML, wirePwRules: _wirePwRules, paintPwRules: _paintPwRules
+  };
 })();
