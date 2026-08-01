@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Automated Grading System for Handwritten Objective Examinations - web-based prototype with answer key management, results review, and Excel export.">
+  <title>Automated Grading System</title>
+  <!--
+    SheetJS is loaded from its CDN rather than npm, matching the original app.
+    The maintainers no longer publish `xlsx` to the public npm registry, so
+    keeping the script tag avoids a dependency that fails to install.
+  -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <style>
+    /*
+      styles.css sets `html, body { height: 100% }` and `#app-root { height: 100% }`.
+      Vue mounts into this extra #app element between them, so without a height
+      here the chain breaks and the shell collapses to its content height.
+      Kept in this file so src/assets/styles.css stays identical to ../css/styles.css.
+    */
+    #app { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
