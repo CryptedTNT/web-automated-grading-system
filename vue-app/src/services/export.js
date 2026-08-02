@@ -131,7 +131,10 @@ function downloadCsv(rows, filename) {
     .map((row) => row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
     .join('\n')
 
-  const blob = new Blob([csv], { type: 'text/csv' })
+  /* The BOM is what tells Excel on Windows to read this as UTF-8.
+     Without it the file is decoded as ANSI and names like "Peña"
+     arrive as "PeÃ±a". */
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url

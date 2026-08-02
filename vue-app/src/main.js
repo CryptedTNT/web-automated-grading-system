@@ -4,12 +4,18 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router/index.js'
 import { loadSavedTheme } from './services/theme.js'
+import { DB } from './services/database.js'
 
 import './assets/styles.css'
 
 // Apply the saved palette before mount so the first paint is not
 // a flash of the default colours.
 loadSavedTheme()
+
+// A run cannot survive a page load, so any session still marked
+// 'Processing' belongs to a tab that was closed mid-job. Settle it
+// before the dashboard reports it as in progress.
+DB.failInterruptedSessions()
 
 const app = createApp(App)
 
