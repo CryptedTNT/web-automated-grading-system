@@ -66,6 +66,19 @@ watch(searchText, (value) => {
   }
 })
 
+/* The search only applies to Results, so leaving that page clears it.
+   Otherwise a stale term stayed in the box and silently re-filtered —
+   and re-selected a different session — the next time Results opened. */
+watch(
+  () => route.name,
+  (name, previous) => {
+    if (previous === 'results' && name !== 'results') {
+      searchText.value = ''
+      store.searchTerm = ''
+    }
+  },
+)
+
 /* ---------- Logout ---------- */
 function logout() {
   store.signOut()

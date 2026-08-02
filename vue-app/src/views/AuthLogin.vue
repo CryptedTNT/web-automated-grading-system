@@ -27,7 +27,10 @@ const STATUS_MESSAGES = {
 const username = ref(route.query.u || '')
 const password = ref('')
 const remember = ref(false)
-const invalid = ref(false)
+/* Tracked per field: a wrong password used to redden the username box
+   too, pointing the teacher at the wrong input. */
+const invalidUsername = ref(false)
+const invalidPassword = ref(false)
 const failureMessage = ref('')
 
 const status = computed(
@@ -41,14 +44,19 @@ const passwordInput = ref(null)
 
 async function submit() {
   if (!username.value.trim() || !password.value.trim()) {
-    invalid.value = true
+    invalidUsername.value = !username.value.trim()
+    invalidPassword.value = !password.value.trim()
     await showMessage('Login Required', 'Please enter your username and password.')
     return
   }
 
   const user = DB.verifyUser(username.value.trim(), password.value)
   if (!user) {
-    invalid.value = true
+    /* Which of the two was wrong is deliberately not revealed to the
+       user, but the username is only flagged when no such account
+       exists — otherwise the password is the one to re-check. */
+    invalidUsername.value = !DB.getUserByUsername(username.value.trim())
+    invalidPassword.value = true
     failureMessage.value = 'Invalid username or password.'
     await showMessage('Login Failed', 'Invalid username or password.')
     return
@@ -61,8 +69,9 @@ async function submit() {
   router.push({ name: 'dashboard' })
 }
 
-function clearInvalid() {
-  invalid.value = false
+function clearInvalid(field) {
+  if (field === 'username') invalidUsername.value = false
+  else invalidPassword.value = false
   failureMessage.value = ''
 }
 </script>
@@ -82,8 +91,8 @@ function clearInvalid() {
           type="text"
           placeholder="Enter your username"
           title="Enter your local teacher account username."
-          :class="{ invalid }"
-          @input="clearInvalid"
+          :class="{ invalid: invalidUsername }"
+          @input="clearInvalid('username')"
           @keydown.enter="passwordInput?.focus()"
         >
       </div>
@@ -95,8 +104,8 @@ function clearInvalid() {
           v-model="password"
           placeholder="Enter your password"
           title="Enter your password."
-          :invalid="invalid"
-          @update:model-value="clearInvalid"
+          :invalid="invalidPassword"
+          @update:model-value="clearInvalid('password')"
           @keydown.enter="submit"
         />
       </div>

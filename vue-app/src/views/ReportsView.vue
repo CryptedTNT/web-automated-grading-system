@@ -39,22 +39,42 @@ function toNumber(value) {
 }
 
 /* The original computed sheets/average/flagged twice — once for the
-   stat cards and again inside _sessionRows(). One helper now. */
+   stat cards and again inside _sessionRows(). One helper now.
+
+   DB.studentResults() re-reads and re-parses the whole results table on
+   every call, so calling it once per session row meant up to 100 full
+   parses per render. Grouping a single read by session id keeps it to
+   one, which matters once a tester has accumulated sessions. */
+const statsBySession = computed(() => {
+  refreshTick.value
+  const grouped = new Map()
+  for (const row of DB.studentResults()) {
+    const bucket = grouped.get(row.session_id) || { sheets: 0, percentSum: 0, flagged: 0 }
+    bucket.sheets += 1
+    bucket.percentSum += toNumber(row.percentage)
+    bucket.flagged += toNumber(row.flagged_count)
+    grouped.set(row.session_id, bucket)
+  }
+
+  const stats = new Map()
+  for (const [id, bucket] of grouped) {
+    stats.set(id, {
+      sheets: bucket.sheets,
+      average: bucket.sheets ? Math.round((bucket.percentSum / bucket.sheets) * 100) / 100 : 0,
+      flagged: bucket.flagged,
+    })
+  }
+  return stats
+})
+
+const EMPTY_STATS = { sheets: 0, average: 0, flagged: 0 }
+
 function sessionStats(sessionId) {
-  const results = DB.studentResults(sessionId)
-  const average = results.length
-    ? Math.round(
-        (results.reduce((sum, row) => sum + toNumber(row.percentage), 0) / results.length) * 100,
-      ) / 100
-    : 0
-  const flagged = results.reduce((sum, row) => sum + toNumber(row.flagged_count), 0)
-  return { sheets: results.length, average, flagged }
+  return statsBySession.value.get(sessionId) || EMPTY_STATS
 }
 
 const selectedStats = computed(() =>
-  selectedSession.value
-    ? sessionStats(selectedSession.value.id)
-    : { sheets: 0, average: 0, flagged: 0 },
+  selectedSession.value ? sessionStats(selectedSession.value.id) : EMPTY_STATS,
 )
 
 /* Capped at 100 rows, as in the original. */

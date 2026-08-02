@@ -68,13 +68,18 @@ vue-app/
 │   ├── App.vue                Shell — sidebar, top bar, dialog host
 │   ├── assets/styles.css      Copied unchanged from ../css/styles.css
 │   ├── router/index.js        Routes + the signed-in guard
-│   ├── stores/app.js          Shared state (replaces App.state)
+│   ├── stores/
+│   │   ├── app.js             Shared state (replaces App.state)
+│   │   └── processing.js      Progress, log, and session of the running job
 │   ├── services/
 │   │   ├── database.js        localStorage CRUD (ported from ../js/database.js)
+│   │   ├── processing.js      Placeholder grading adapter — the model seam
+│   │   ├── export.js          Workbook building and download
+│   │   ├── backup.js          Whole-app backup file download and read
 │   │   ├── theme.js           Palettes and CSS variable swapping
 │   │   └── dialog.js          showMessage() / showConfirm()
 │   ├── components/            HeroPanel, PasswordField, PasswordRules,
-│   │                          DialogHost, PendingPage
+│   │                          DialogHost
 │   └── views/                 One component per page
 ```
 
@@ -89,17 +94,54 @@ vue-app/
 | How to Use | Ported | `js/how_to_use.js` |
 | Answer Keys | Ported | `js/answer_key.js` |
 | Upload Sheets | Ported | `js/upload.js` |
-| Processing | Placeholder | `js/processing.js` |
+| Processing | Ported | `js/processing.js` |
 | Results | Ported | `js/results.js` |
 | Student Result | Ported | `js/student_result.js` |
 | Review Flagged | Ported | `js/review.js` |
 | Reports | Ported | `js/reports.js` |
-| Settings | Placeholder | `js/settings.js` |
+| Settings | Ported | `js/settings.js` |
 
-Placeholder pages are reachable from the sidebar and explain which file to port.
-Suggested order: Results → Student Result → Reports → Upload → Settings →
-Processing, then **Answer Keys and Review Flagged last** — those two gain the
-most from reactivity and are best attempted once the team is comfortable.
+Every page is ported — there are no placeholder screens left.
+
+## Processing sessions
+
+A run is driven by `stores/processing.js`, so the progress bar and log
+survive navigating to another page and back. A session moves through these
+statuses:
+
+| Status | Meaning |
+| --- | --- |
+| Processing | A run is live in this tab right now. |
+| Completed | Every queued image produced a record. |
+| Cancelled | Stopped with **Cancel Processing**. Records already written are kept and the upload queue is left intact, so the run can be restarted. |
+| Failed | The adapter threw, or the tab was closed mid-run. |
+
+Cancelling takes effect after the image being processed finishes, so a
+partial record is never written. Because a run cannot survive a page load,
+`DB.failInterruptedSessions()` runs once at startup in `main.js` and marks
+any session still sitting at "Processing" as Failed — otherwise a session
+from a closed tab would report itself as in progress forever.
+
+## Backup and restore
+
+All data lives in `localStorage`, which is scoped to one browser profile on one
+origin — data created on `localhost` does **not** follow you to a deployed
+GitHub Pages build. **Settings → Data** is the supported way to move it.
+
+- **Download Backup** writes a single `ags_backup_YYYY-MM-DD.json` containing
+  every key in `STORAGE_KEYS`: the teacher account, answer keys, sessions,
+  student results, and every manual review decision.
+- **Restore from File** validates the file, confirms what it contains, then
+  **replaces** everything in this browser — a key absent from the backup is
+  removed, so the result matches the machine the backup came from. Validation
+  runs fully before the first write, so a rejected file cannot leave storage
+  half-overwritten. The page reloads afterwards so no in-memory state survives.
+
+Useful for seeding a defense demo: build one realistic dataset, export it, and
+import it on whatever machine you present from.
+
+> **Keep the backup file private.** It contains the account's password and
+> security-answer hashes and salts. Do not commit it or email it.
 
 ## Porting a page
 
@@ -126,5 +168,10 @@ and then attaches listeners by element id. The Vue equivalent:
   a shared database.
 - **Passwords are hashed in the browser** and stored in `localStorage`. That is
   a prototype measure, not authentication. Real accounts need a backend.
+  The hash input is UTF-8 encoded first (`_utf8` in `database.js`), because the
+  bundled SHA-256 takes one byte per character. Without that step a password
+  containing a smart quote, an emoji, or any character above U+00FF produced no
+  hash at all, and the account it created would accept *any* such password.
+  Do not remove that encoding step.
 - **OCR and grading are not connected.** `processing.js` writes placeholder
   records.

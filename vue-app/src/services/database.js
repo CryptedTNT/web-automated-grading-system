@@ -58,7 +58,11 @@ export const DB = (() => {
     while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
     for (i = 0; i < ascii[lengthProperty]; i++) {
       j = ascii.charCodeAt(i);
-      if (j >> 8) return;
+      /* One byte per character is the algorithm's contract. Callers must
+         UTF-8 encode first (see _utf8). This used to `return` — silently
+         handing back `undefined` instead of a hash — which disabled the
+         password check entirely for any account created that way. */
+      if (j >> 8) throw new Error('sha256 requires byte-sized characters; UTF-8 encode first.');
       words[i >> 2] |= j << ((3 - i % 4) * 8);
     }
     words[words[lengthProperty]] = ((asciiLength / maxWord) | 0);
@@ -113,13 +117,30 @@ export const DB = (() => {
     return result;
   }
 
+  /* sha256() consumes one byte per character, so anything above U+00FF
+     has to be encoded first. Without this, a password containing a smart
+     quote (what Word and Google Docs substitute for '), an emoji, or any
+     CJK character produced no hash at all. ASCII is unchanged by UTF-8,
+     so accounts created before this fix still verify normally. */
+  function _utf8(text) {
+    const bytes = new TextEncoder().encode(String(text));
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return binary;
+  }
+
   function _hashSync(value, salt) {
     salt = salt || Math.random().toString(36).slice(2, 18);
-    const hash = sha256(value + ':' + salt);
+    const hash = sha256(_utf8(value + ':' + salt));
+    if (typeof hash !== 'string' || !hash) throw new Error('Password could not be hashed.');
     return { hash, salt };
   }
 
   function _verifyHash(value, expectedHash, salt) {
+    /* A missing or non-string hash must never verify. Accounts created
+       by the broken hashing above stored no password_hash at all, and
+       `undefined === undefined` let any such password sign in. */
+    if (typeof expectedHash !== 'string' || !expectedHash) return false;
     const { hash } = _hashSync(value, salt);
     return hash === expectedHash;
   }
@@ -340,6 +361,24 @@ export const DB = (() => {
     _set('ags_sessions', sessions);
   }
 
+  /* A session is only ever 'Processing' while a run is live in this tab.
+     Anything still marked that way at startup was interrupted — a closed
+     tab or a reload — and would otherwise sit at "Processing" forever
+     with partial records. Called once from main.js before the first
+     render. */
+  function failInterruptedSessions() {
+    const sess = _get('ags_sessions');
+    let changed = false;
+    for (const s of sess) {
+      if (s.status === 'Processing') {
+        s.status = 'Failed';
+        changed = true;
+      }
+    }
+    if (changed) _set('ags_sessions', sess);
+    return changed;
+  }
+
   function sessions() {
     const sess = _get('ags_sessions');
     const keys = _get('ags_answer_keys');
@@ -487,20 +526,104 @@ export const DB = (() => {
     return { sheets, sessions: sessCount, flagged, average: avg };
   }
 
-  /* ======================== DEBUG SUPPORT ======================== */
+  /* ======================== BACKUP / RESTORE ========================
+     Everything this app knows lives in the keys above, in one browser
+     profile on one origin. These two functions are the only supported
+     way to move that state to another machine — or to survive a
+     "clear browsing data". STORAGE_KEYS is the source of truth for
+     what a backup contains, so adding a key there is enough to include
+     it in future backups. */
   const STORAGE_KEYS = [
     'ags_users', 'ags_answer_keys', 'ags_answer_key_items', 'ags_sessions',
     'ags_student_results', 'ags_result_items', 'ags_settings',
   ];
 
-  function resetAllData() {
-    STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
+  /* ags_settings is a single object; every other key holds an array. */
+  const OBJECT_KEYS = ['ags_settings'];
+
+  const BACKUP_FORMAT = 'ags-backup';
+  const BACKUP_VERSION = 1;
+
+  function exportAllData() {
+    const data = {};
+    for (const key of STORAGE_KEYS) {
+      const raw = localStorage.getItem(key);
+      // Absent keys are omitted rather than written as null, so a
+      // restore can tell "never existed" from "empty".
+      if (raw === null) continue;
+      try {
+        data[key] = JSON.parse(raw);
+      } catch {
+        // Unparseable storage is skipped rather than aborting the whole
+        // backup — a corrupt key should not cost the teacher the rest.
+        continue;
+      }
+    }
+    return {
+      format: BACKUP_FORMAT,
+      version: BACKUP_VERSION,
+      exported_at: _now(),
+      data,
+    };
   }
 
-  function resetGradingData() {
-    STORAGE_KEYS
-      .filter(key => key !== 'ags_users' && key !== 'ags_settings')
-      .forEach(key => localStorage.removeItem(key));
+  /* Throws if the payload is not a restorable backup. Split out from
+     importAllData so the UI can reject a bad file *before* asking the
+     teacher to confirm a destructive restore — being prompted to
+     replace everything and only then told the file was never valid is
+     the wrong order. */
+  function validateBackup(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('This file is not an Automated Grading System backup.');
+    }
+    if (payload.format !== BACKUP_FORMAT) {
+      throw new Error('This file is not an Automated Grading System backup.');
+    }
+    if (typeof payload.version !== 'number' || payload.version > BACKUP_VERSION) {
+      throw new Error('This backup was made by a newer version of the app. Update the app and try again.');
+    }
+
+    const data = payload.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('This backup file contains no data.');
+    }
+
+    const keys = Object.keys(data);
+    const unknown = keys.filter(key => !STORAGE_KEYS.includes(key));
+    if (unknown.length) {
+      throw new Error(`This backup contains unrecognized data (${unknown.join(', ')}). It may be from a different application.`);
+    }
+    if (!keys.length) {
+      throw new Error('This backup file contains no data.');
+    }
+
+    for (const key of keys) {
+      const value = data[key];
+      const shouldBeObject = OBJECT_KEYS.includes(key);
+      const isObject = value && typeof value === 'object' && !Array.isArray(value);
+      if (shouldBeObject && !isObject) {
+        throw new Error(`The "${key}" section of this backup is damaged.`);
+      }
+      if (!shouldBeObject && !Array.isArray(value)) {
+        throw new Error(`The "${key}" section of this backup is damaged.`);
+      }
+    }
+
+    return data;
+  }
+
+  function importAllData(payload) {
+    /* Validation runs to completion first, so a rejected file can never
+       leave storage half-overwritten. */
+    const data = validateBackup(payload);
+
+    /* Replace-all, not merge: a key missing from the file is removed, so
+       the restored browser matches the backed-up one exactly. */
+    for (const key of STORAGE_KEYS) {
+      if (key in data) localStorage.setItem(key, JSON.stringify(data[key]));
+      else localStorage.removeItem(key);
+    }
+    return Object.keys(data).length;
   }
 
   /* ======================== SETTINGS ======================== */
@@ -557,11 +680,11 @@ export const DB = (() => {
     updateUserProfile, updateUserPassword, resetPasswordWithSecurityAnswer,
     PASSWORD_RULES, checkPassword, passwordError,
     createAnswerKey, updateAnswerKey, deleteAnswerKey, answerKeys, answerKeyItems, replaceAnswerKeyItems,
-    createSession, updateSessionStatus, sessions, latestSessionId, clearSession,
+    createSession, updateSessionStatus, sessions, latestSessionId, clearSession, failInterruptedSessions,
     addStudentResult, studentResults, addResultItem, resultItems,
     updateResultItem, updateStudentResult, recalculateStudentResult, getStudentResultById, getFirstFlaggedItem,
     dashboardStats,
     getSettings, setSetting, getExportPreferences, setExportPreferences,
-    resetAllData, resetGradingData,
+    exportAllData, validateBackup, importAllData,
   };
 })();

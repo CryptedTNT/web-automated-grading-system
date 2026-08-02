@@ -35,10 +35,37 @@ function makeRow(values) {
   }
 }
 
+/* Serialized copy of the last saved (or freshly loaded) state. Comparing
+   against it is what tells us the table has unsaved edits — without this
+   the original replaced the whole table on a stray click in the sidebar
+   and a teacher could lose twenty typed items with no warning. */
+const savedSnapshot = ref('')
+
+function snapshot() {
+  return JSON.stringify({
+    name: keyName.value.trim(),
+    // uid is a local render key, not data — it must not count as a change.
+    rows: rows.value.map(({ uid, ...fields }) => fields),
+  })
+}
+
+const isDirty = computed(() => snapshot() !== savedSnapshot.value)
+
+async function confirmDiscard() {
+  if (!isDirty.value) return true
+  return showConfirm(
+    'Discard Unsaved Changes',
+    'This answer key has unsaved changes. Discard them and continue?',
+  )
+}
+
 function reload(selectKeyId) {
   keys.value = DB.answerKeys()
   const targetId = selectKeyId || currentKeyId.value || keys.value[0]?.id || null
   if (targetId && !creatingNew.value) loadKey(targetId)
+  // Nothing to load (no keys yet, or the last one was just deleted):
+  // baseline the snapshot so an untouched empty form is not "dirty".
+  else savedSnapshot.value = snapshot()
 }
 
 function loadKey(keyId) {
@@ -59,26 +86,52 @@ function loadKey(keyId) {
       item.fuzzy_threshold,
     ]),
   )
+  savedSnapshot.value = snapshot()
 }
 
-function newKey() {
+/* Sidebar clicks go through here so unsaved work is never silently lost. */
+async function selectKey(keyId) {
+  if (keyId === currentKeyId.value && !creatingNew.value) return
+  if (!(await confirmDiscard())) return
+  loadKey(keyId)
+}
+
+/* Never reuse a name that already exists — `keys.length + 1` produced a
+   duplicate as soon as a key in the middle of the list had been deleted,
+   leaving two identical entries in the sidebar. */
+function nextKeyName() {
+  const taken = new Set(keys.value.map((key) => key.name))
+  let n = keys.value.length + 1
+  while (taken.has(`Answer Key ${n}`)) n += 1
+  return `Answer Key ${n}`
+}
+
+async function newKey() {
+  if (!(await confirmDiscard())) return
   creatingNew.value = true
   currentKeyId.value = null
   selectedRow.value = null
-  keyName.value = `Answer Key ${keys.value.length + 1}`
+  keyName.value = nextKeyName()
   rows.value = Array.from({ length: 5 }, (_, i) =>
     makeRow([i + 1, 'Multiple Choice', '', 'A', '', 1, 85]),
   )
+  savedSnapshot.value = snapshot()
 }
 
 function addRow() {
   rows.value.push(makeRow())
 }
 
-function deleteRow() {
+async function deleteRow() {
   if (!rows.value.length) return
   const index = rows.value.findIndex((r) => r.uid === selectedRow.value)
-  rows.value.splice(index >= 0 ? index : rows.value.length - 1, 1)
+  /* Falling back to the last row meant a misplaced click silently deleted
+     work the teacher never pointed at. */
+  if (index < 0) {
+    await showMessage('No Row Selected', 'Click the item row you want to delete first.')
+    return
+  }
+  rows.value.splice(index, 1)
   selectedRow.value = null
 }
 
@@ -90,10 +143,17 @@ function collectItems() {
     const correct = String(row.correct).trim()
     if (!correct) return
 
+    /* The group only means anything for Enumeration, so discard it for
+       every other type *before* validating — otherwise a stray note in
+       the Group cell of a Multiple Choice row blocked the whole save
+       over a value that was about to be thrown away. */
+    const isEnumeration = row.type.toLowerCase().includes('enumeration')
     const group = String(row.group).trim()
-    let enumGroup = group ? parseInt(group) : null
-    if (isNaN(enumGroup)) throw new Error(`Invalid group number in row ${i + 1}.`)
-    if (!row.type.toLowerCase().includes('enumeration')) enumGroup = null
+    let enumGroup = null
+    if (isEnumeration && group) {
+      enumGroup = parseInt(group)
+      if (isNaN(enumGroup)) throw new Error(`Invalid group number in row ${i + 1}.`)
+    }
 
     items.push({
       item_no: items.length + 1,
@@ -135,7 +195,7 @@ async function saveKey() {
   creatingNew.value = false
   currentKeyId.value = keyId
   await showMessage('Saved', 'Answer key saved.')
-  reload(keyId)
+  reload(keyId) // reloads from storage and refreshes the dirty snapshot
 }
 
 async function deleteAnswerKey() {
@@ -150,6 +210,7 @@ async function deleteAnswerKey() {
   currentKeyId.value = null
   keyName.value = ''
   rows.value = []
+  savedSnapshot.value = snapshot() // the emptied form is not "unsaved work"
   reload()
 }
 
@@ -178,7 +239,7 @@ onMounted(reload)
             :key="key.id"
             class="list-item"
             :class="{ active: key.id === currentKeyId }"
-            @click="loadKey(key.id)"
+            @click="selectKey(key.id)"
           >
             {{ key.name }}
           </div>
