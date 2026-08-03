@@ -526,106 +526,6 @@ export const DB = (() => {
     return { sheets, sessions: sessCount, flagged, average: avg };
   }
 
-  /* ======================== BACKUP / RESTORE ========================
-     Everything this app knows lives in the keys above, in one browser
-     profile on one origin. These two functions are the only supported
-     way to move that state to another machine — or to survive a
-     "clear browsing data". STORAGE_KEYS is the source of truth for
-     what a backup contains, so adding a key there is enough to include
-     it in future backups. */
-  const STORAGE_KEYS = [
-    'ags_users', 'ags_answer_keys', 'ags_answer_key_items', 'ags_sessions',
-    'ags_student_results', 'ags_result_items', 'ags_settings',
-  ];
-
-  /* ags_settings is a single object; every other key holds an array. */
-  const OBJECT_KEYS = ['ags_settings'];
-
-  const BACKUP_FORMAT = 'ags-backup';
-  const BACKUP_VERSION = 1;
-
-  function exportAllData() {
-    const data = {};
-    for (const key of STORAGE_KEYS) {
-      const raw = localStorage.getItem(key);
-      // Absent keys are omitted rather than written as null, so a
-      // restore can tell "never existed" from "empty".
-      if (raw === null) continue;
-      try {
-        data[key] = JSON.parse(raw);
-      } catch {
-        // Unparseable storage is skipped rather than aborting the whole
-        // backup — a corrupt key should not cost the teacher the rest.
-        continue;
-      }
-    }
-    return {
-      format: BACKUP_FORMAT,
-      version: BACKUP_VERSION,
-      exported_at: _now(),
-      data,
-    };
-  }
-
-  /* Throws if the payload is not a restorable backup. Split out from
-     importAllData so the UI can reject a bad file *before* asking the
-     teacher to confirm a destructive restore — being prompted to
-     replace everything and only then told the file was never valid is
-     the wrong order. */
-  function validateBackup(payload) {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      throw new Error('This file is not an Automated Grading System backup.');
-    }
-    if (payload.format !== BACKUP_FORMAT) {
-      throw new Error('This file is not an Automated Grading System backup.');
-    }
-    if (typeof payload.version !== 'number' || payload.version > BACKUP_VERSION) {
-      throw new Error('This backup was made by a newer version of the app. Update the app and try again.');
-    }
-
-    const data = payload.data;
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      throw new Error('This backup file contains no data.');
-    }
-
-    const keys = Object.keys(data);
-    const unknown = keys.filter(key => !STORAGE_KEYS.includes(key));
-    if (unknown.length) {
-      throw new Error(`This backup contains unrecognized data (${unknown.join(', ')}). It may be from a different application.`);
-    }
-    if (!keys.length) {
-      throw new Error('This backup file contains no data.');
-    }
-
-    for (const key of keys) {
-      const value = data[key];
-      const shouldBeObject = OBJECT_KEYS.includes(key);
-      const isObject = value && typeof value === 'object' && !Array.isArray(value);
-      if (shouldBeObject && !isObject) {
-        throw new Error(`The "${key}" section of this backup is damaged.`);
-      }
-      if (!shouldBeObject && !Array.isArray(value)) {
-        throw new Error(`The "${key}" section of this backup is damaged.`);
-      }
-    }
-
-    return data;
-  }
-
-  function importAllData(payload) {
-    /* Validation runs to completion first, so a rejected file can never
-       leave storage half-overwritten. */
-    const data = validateBackup(payload);
-
-    /* Replace-all, not merge: a key missing from the file is removed, so
-       the restored browser matches the backed-up one exactly. */
-    for (const key of STORAGE_KEYS) {
-      if (key in data) localStorage.setItem(key, JSON.stringify(data[key]));
-      else localStorage.removeItem(key);
-    }
-    return Object.keys(data).length;
-  }
-
   /* ======================== SETTINGS ======================== */
   function getSettings() { return _getObj('ags_settings'); }
   function setSetting(key, value) {
@@ -685,6 +585,5 @@ export const DB = (() => {
     updateResultItem, updateStudentResult, recalculateStudentResult, getStudentResultById, getFirstFlaggedItem,
     dashboardStats,
     getSettings, setSetting, getExportPreferences, setExportPreferences,
-    exportAllData, validateBackup, importAllData,
   };
 })();
