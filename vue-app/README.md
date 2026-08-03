@@ -75,7 +75,6 @@ vue-app/
 │   │   ├── database.js        localStorage CRUD (ported from ../js/database.js)
 │   │   ├── processing.js      Placeholder grading adapter — the model seam
 │   │   ├── export.js          Workbook building and download
-│   │   ├── backup.js          Whole-app backup file download and read
 │   │   ├── theme.js           Palettes and CSS variable swapping
 │   │   └── dialog.js          showMessage() / showConfirm()
 │   ├── components/            HeroPanel, PasswordField, PasswordRules,
@@ -121,27 +120,6 @@ partial record is never written. Because a run cannot survive a page load,
 `DB.failInterruptedSessions()` runs once at startup in `main.js` and marks
 any session still sitting at "Processing" as Failed — otherwise a session
 from a closed tab would report itself as in progress forever.
-
-## Backup and restore
-
-All data lives in `localStorage`, which is scoped to one browser profile on one
-origin — data created on `localhost` does **not** follow you to a deployed
-GitHub Pages build. **Settings → Data** is the supported way to move it.
-
-- **Download Backup** writes a single `ags_backup_YYYY-MM-DD.json` containing
-  every key in `STORAGE_KEYS`: the teacher account, answer keys, sessions,
-  student results, and every manual review decision.
-- **Restore from File** validates the file, confirms what it contains, then
-  **replaces** everything in this browser — a key absent from the backup is
-  removed, so the result matches the machine the backup came from. Validation
-  runs fully before the first write, so a rejected file cannot leave storage
-  half-overwritten. The page reloads afterwards so no in-memory state survives.
-
-Useful for seeding a defense demo: build one realistic dataset, export it, and
-import it on whatever machine you present from.
-
-> **Keep the backup file private.** It contains the account's password and
-> security-answer hashes and salts. Do not commit it or email it.
 
 ## Porting a page
 

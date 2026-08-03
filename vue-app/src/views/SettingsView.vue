@@ -16,8 +16,7 @@
 import { computed, ref } from 'vue'
 import { DB } from '@/services/database.js'
 import { useAppStore } from '@/stores/app.js'
-import { showMessage, showConfirm } from '@/services/dialog.js'
-import { downloadBackup, readBackupFile, describe } from '@/services/backup.js'
+import { showMessage } from '@/services/dialog.js'
 import { PALETTES, DEFAULT_THEME, applyTheme } from '@/services/theme.js'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
@@ -29,7 +28,6 @@ const TABS = [
   { id: 'set-template', label: 'Exam Template' },
   { id: 'set-export', label: 'Export Preferences' },
   { id: 'set-theme', label: 'Application Theme' },
-  { id: 'set-data', label: 'Data' },
   { id: 'set-about', label: 'About' },
 ]
 
@@ -228,56 +226,6 @@ function selectTheme(key) {
   activeTheme.value = key
   applyTheme(key)
 }
-
-/* ----------------------------------------------------------- Data */
-
-const restoreInput = ref(null)
-
-async function saveBackup() {
-  try {
-    const filename = downloadBackup()
-    await showMessage('Backup Downloaded', `Saved as ${filename}. Keep this file private — it contains your password hash.`)
-  } catch (error) {
-    await showMessage('Backup Failed', error.message || 'The backup could not be created.')
-  }
-}
-
-async function onRestorePicked(event) {
-  const file = event.target.files?.[0]
-  // Let the same file be chosen again after a cancel or a failure.
-  event.target.value = ''
-  if (!file) return
-
-  /* Parse and validate before prompting: asking the teacher to confirm
-     replacing everything, and only then telling them the file was never
-     a backup, is the wrong order. */
-  let payload
-  try {
-    payload = await readBackupFile(file)
-    DB.validateBackup(payload)
-  } catch (error) {
-    await showMessage('Restore Failed', error.message)
-    return
-  }
-
-  const confirmed = await showConfirm(
-    'Restore Backup',
-    `${describe(payload)} Restoring replaces all data currently in this browser, including any answer keys and review decisions that are not in the backup. This cannot be undone.`,
-  )
-  if (!confirmed) return
-
-  try {
-    DB.importAllData(payload)
-  } catch (error) {
-    await showMessage('Restore Failed', error.message)
-    return
-  }
-
-  /* A full reload re-runs loadSavedTheme() and failInterruptedSessions()
-     in main.js and re-evaluates the router guard, so no in-memory state
-     from the previous account can survive the restore. */
-  window.location.reload()
-}
 </script>
 
 <template>
@@ -447,47 +395,6 @@ async function onRestorePicked(event) {
           {{ theme.label }}
         </button>
       </div>
-    </section>
-
-    <!-- Data -->
-    <section
-      class="tab-content settings-panel"
-      :class="{ active: activeTab === 'set-data' }"
-      role="tabpanel"
-    >
-      <div class="card-title">Backup and Restore</div>
-      <div class="template-summary">
-        <div>
-          <div class="section-title">Whole-application backup</div>
-          <div class="muted-text mt-8">
-            All data lives only in this browser. A backup is the supported way to
-            move it to another computer, or to recover after clearing browsing data.
-            It includes the teacher account, answer keys, sessions, student results,
-            and every review decision.
-          </div>
-        </div>
-        <span class="badge badge-blue">JSON File</span>
-      </div>
-
-      <div class="muted-text mt-14">
-        <strong>Keep the backup file private.</strong> It contains your password
-        and security-answer hashes. Do not email it or commit it to a repository.
-      </div>
-
-      <div class="settings-actions">
-        <button class="btn btn-primary" @click="saveBackup">Download Backup</button>
-        <button class="btn btn-secondary" @click="restoreInput?.click()">
-          Restore from File
-        </button>
-        <input
-          ref="restoreInput"
-          type="file"
-          accept="application/json,.json"
-          hidden
-          @change="onRestorePicked"
-        >
-      </div>
-
     </section>
 
     <!-- About -->
