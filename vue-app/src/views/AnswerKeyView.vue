@@ -1,51 +1,115 @@
 <script setup>
 /* ============================================================
-   AnswerKeyView.vue — Answer Key CRUD + item table
-   Ported from js/answer_key.js.
+   AnswerKeyView.vue — Exam questionnaire builder + answer key
+   Teachers type the actual question/choice text and mark the
+   correct answer in one grouped-by-type workflow (Multiple
+   Choice, True or False, Identification, Enumeration), then can
+   preview/print a sheet styled after the paper exam template.
    ============================================================ */
 
 import { ref, computed, onMounted } from 'vue'
 import { DB } from '@/services/database.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
 
-const HEADERS = ['#', 'Type', 'Group', 'Correct Answer(s)', 'Alternative Answers', 'Points', 'Threshold']
 const Q_TYPES = ['Multiple Choice', 'True or False', 'Identification', 'Enumeration']
+const MC_LETTERS = ['a', 'b', 'c', 'd']
 
 const keys = ref([])
 const currentKeyId = ref(null)
 const creatingNew = ref(false)
 const keyName = ref('')
-const rows = ref([])
-const selectedRow = ref(null)
 
-/* v-for needs a stable key per row, and rows have no database id
-   until they are saved — so each one carries a local uid. */
+const mcItems = ref([])
+const tfItems = ref([])
+const idItems = ref([])
+const enumGroups = ref([])
+/* Any saved row whose `type` isn't one of the 4 known values (e.g. hand-edited
+   localStorage) is carried through unedited rather than silently dropped. */
+const otherItems = ref([])
+
+/* v-for needs a stable key per row/blank, and rows have no database id until
+   saved — so each one carries a local uid, shared across every section. */
 let nextUid = 1
-function makeRow(values) {
-  const [, type, group, correct, alternatives, points, threshold] =
-    values || [0, 'Identification', '', '', '', 1, 85]
+
+function makeMcItem(item) {
+  const v = item || {}
+  const choices = v.choices || {}
   return {
     uid: nextUid++,
-    type: String(type),
-    group: group ?? '',
-    correct: correct ?? '',
-    alternatives: alternatives ?? '',
-    points: points ?? 1,
-    threshold: threshold ?? 85,
+    question_text: v.question_text ?? '',
+    choices: { a: choices.a ?? '', b: choices.b ?? '', c: choices.c ?? '', d: choices.d ?? '' },
+    correct: v.correct_answer || 'a',
+    points: v.points ?? 1,
+    threshold: v.fuzzy_threshold ?? 100,
+  }
+}
+
+function makeTfItem(item) {
+  const v = item || {}
+  return {
+    uid: nextUid++,
+    question_text: v.question_text ?? '',
+    correct: v.correct_answer || 'True',
+    points: v.points ?? 1,
+    threshold: v.fuzzy_threshold ?? 100,
+  }
+}
+
+function makeIdItem(item) {
+  const v = item || {}
+  return {
+    uid: nextUid++,
+    question_text: v.question_text ?? '',
+    correct: v.correct_answer ?? '',
+    alternatives: v.alternatives ?? '',
+    points: v.points ?? 1,
+    threshold: v.fuzzy_threshold ?? 85,
+  }
+}
+
+function makeEnumBlank(item) {
+  const v = item || {}
+  return {
+    uid: nextUid++,
+    correct: v.correct_answer ?? '',
+    points: v.points ?? 1,
+    threshold: v.fuzzy_threshold ?? 85,
+  }
+}
+
+function makeEnumGroup(questionText, blankItems) {
+  const blanks = blankItems && blankItems.length ? blankItems : [null]
+  return {
+    uid: nextUid++,
+    question_text: questionText ?? '',
+    blanks: blanks.map(makeEnumBlank),
   }
 }
 
 /* Serialized copy of the last saved (or freshly loaded) state. Comparing
-   against it is what tells us the table has unsaved edits — without this
-   the original replaced the whole table on a stray click in the sidebar
-   and a teacher could lose twenty typed items with no warning. */
+   against it is what tells us the builder has unsaved edits — without this
+   the original replaced everything on a stray click in the sidebar and a
+   teacher could lose a whole typed-up questionnaire with no warning. */
 const savedSnapshot = ref('')
+
+function stripUid(value) {
+  if (Array.isArray(value)) return value.map(stripUid)
+  if (value && typeof value === 'object') {
+    const { uid, ...rest } = value
+    for (const k of Object.keys(rest)) rest[k] = stripUid(rest[k])
+    return rest
+  }
+  return value
+}
 
 function snapshot() {
   return JSON.stringify({
     name: keyName.value.trim(),
-    // uid is a local render key, not data — it must not count as a change.
-    rows: rows.value.map(({ uid, ...fields }) => fields),
+    mc: stripUid(mcItems.value),
+    tf: stripUid(tfItems.value),
+    id: stripUid(idItems.value),
+    enumGroups: stripUid(enumGroups.value),
+    other: otherItems.value,
   })
 }
 
@@ -55,7 +119,7 @@ async function confirmDiscard() {
   if (!isDirty.value) return true
   return showConfirm(
     'Discard Unsaved Changes',
-    'This answer key has unsaved changes. Discard them and continue?',
+    'This exam questionnaire has unsaved changes. Discard them and continue?',
   )
 }
 
@@ -74,18 +138,24 @@ function loadKey(keyId) {
   creatingNew.value = false
   currentKeyId.value = keyId
   keyName.value = key.name
-  selectedRow.value = null
-  rows.value = DB.answerKeyItems(keyId).map((item) =>
-    makeRow([
-      item.item_no,
-      item.type,
-      item.enum_group ?? '',
-      item.correct_answer,
-      item.alternatives,
-      item.points,
-      item.fuzzy_threshold,
-    ]),
-  )
+
+  const items = DB.answerKeyItems(keyId)
+  mcItems.value = items.filter((i) => i.type === 'Multiple Choice').map(makeMcItem)
+  tfItems.value = items.filter((i) => i.type === 'True or False').map(makeTfItem)
+  idItems.value = items.filter((i) => i.type === 'Identification').map(makeIdItem)
+
+  const enumRows = items.filter((i) => i.type === 'Enumeration')
+  const groups = new Map()
+  enumRows.forEach((row) => {
+    // Legacy rows saved before grouping was auto-assigned may lack enum_group.
+    const groupKey = row.enum_group != null ? row.enum_group : `solo-${row.id}`
+    if (!groups.has(groupKey)) groups.set(groupKey, [])
+    groups.get(groupKey).push(row)
+  })
+  enumGroups.value = [...groups.values()].map((rows) => makeEnumGroup(rows[0]?.question_text, rows))
+
+  otherItems.value = items.filter((i) => !Q_TYPES.includes(i.type))
+
   savedSnapshot.value = snapshot()
 }
 
@@ -110,76 +180,124 @@ async function newKey() {
   if (!(await confirmDiscard())) return
   creatingNew.value = true
   currentKeyId.value = null
-  selectedRow.value = null
   keyName.value = nextKeyName()
-  rows.value = Array.from({ length: 5 }, (_, i) =>
-    makeRow([i + 1, 'Multiple Choice', '', 'A', '', 1, 85]),
-  )
+  mcItems.value = []
+  tfItems.value = []
+  idItems.value = []
+  enumGroups.value = []
+  otherItems.value = []
   savedSnapshot.value = snapshot()
 }
 
-function addRow() {
-  rows.value.push(makeRow())
+function addMcItem() { mcItems.value.push(makeMcItem()) }
+function removeMcItem(uid) { mcItems.value = mcItems.value.filter((r) => r.uid !== uid) }
+
+function addTfItem() { tfItems.value.push(makeTfItem()) }
+function removeTfItem(uid) { tfItems.value = tfItems.value.filter((r) => r.uid !== uid) }
+
+function addIdItem() { idItems.value.push(makeIdItem()) }
+function removeIdItem(uid) { idItems.value = idItems.value.filter((r) => r.uid !== uid) }
+
+function addEnumGroup() { enumGroups.value.push(makeEnumGroup()) }
+function removeEnumGroup(uid) { enumGroups.value = enumGroups.value.filter((g) => g.uid !== uid) }
+function addEnumBlank(group) { group.blanks.push(makeEnumBlank()) }
+function removeEnumBlank(group, uid) {
+  if (group.blanks.length <= 1) return
+  group.blanks = group.blanks.filter((b) => b.uid !== uid)
 }
 
-async function deleteRow() {
-  if (!rows.value.length) return
-  const index = rows.value.findIndex((r) => r.uid === selectedRow.value)
-  /* Falling back to the last row meant a misplaced click silently deleted
-     work the teacher never pointed at. */
-  if (index < 0) {
-    await showMessage('No Row Selected', 'Click the item row you want to delete first.')
-    return
-  }
-  rows.value.splice(index, 1)
-  selectedRow.value = null
-}
-
-/* Mirrors _collectItems(): rows without a correct answer are skipped,
-   and a group number is only kept for Enumeration items. */
+/* Flattens the 4 grouped sections into one ordered array (MC, then True/False,
+   then Identification, then Enumeration) with freshly computed sequential
+   item_no. A row/group is kept if it has any typed content; nothing throws,
+   so saving an untouched legacy key behaves exactly as it did before. */
 function collectItems() {
   const items = []
-  rows.value.forEach((row, i) => {
-    const correct = String(row.correct).trim()
-    if (!correct) return
 
-    /* The group only means anything for Enumeration, so discard it for
-       every other type *before* validating — otherwise a stray note in
-       the Group cell of a Multiple Choice row blocked the whole save
-       over a value that was about to be thrown away. */
-    const isEnumeration = row.type.toLowerCase().includes('enumeration')
-    const group = String(row.group).trim()
-    let enumGroup = null
-    if (isEnumeration && group) {
-      enumGroup = parseInt(group)
-      if (isNaN(enumGroup)) throw new Error(`Invalid group number in row ${i + 1}.`)
+  mcItems.value.forEach((row) => {
+    const q = row.question_text.trim()
+    const choices = {
+      a: row.choices.a.trim(),
+      b: row.choices.b.trim(),
+      c: row.choices.c.trim(),
+      d: row.choices.d.trim(),
     }
-
+    if (!q && !Object.values(choices).some((c) => c)) return
     items.push({
       item_no: items.length + 1,
-      type: row.type || 'Identification',
-      enum_group: enumGroup,
+      type: 'Multiple Choice',
+      enum_group: null,
+      question_text: q,
+      choices,
+      correct_answer: row.correct,
+      alternatives: '',
+      points: parseFloat(row.points) || 1,
+      fuzzy_threshold: parseInt(row.threshold) || 85,
+    })
+  })
+
+  tfItems.value.forEach((row) => {
+    const q = row.question_text.trim()
+    if (!q) return
+    items.push({
+      item_no: items.length + 1,
+      type: 'True or False',
+      enum_group: null,
+      question_text: q,
+      choices: null,
+      correct_answer: row.correct,
+      alternatives: '',
+      points: parseFloat(row.points) || 1,
+      fuzzy_threshold: parseInt(row.threshold) || 85,
+    })
+  })
+
+  idItems.value.forEach((row) => {
+    const q = row.question_text.trim()
+    const correct = String(row.correct).trim()
+    if (!q && !correct) return
+    items.push({
+      item_no: items.length + 1,
+      type: 'Identification',
+      enum_group: null,
+      question_text: q,
+      choices: null,
       correct_answer: correct,
       alternatives: String(row.alternatives).trim(),
       points: parseFloat(row.points) || 1,
       fuzzy_threshold: parseInt(row.threshold) || 85,
     })
   })
+
+  let groupNo = 0
+  enumGroups.value.forEach((group) => {
+    const q = group.question_text.trim()
+    const blanks = group.blanks.filter((b) => String(b.correct).trim())
+    if (!q && !blanks.length) return
+    groupNo += 1
+    blanks.forEach((b) => {
+      items.push({
+        item_no: items.length + 1,
+        type: 'Enumeration',
+        enum_group: groupNo,
+        question_text: q,
+        choices: null,
+        correct_answer: String(b.correct).trim(),
+        alternatives: '',
+        points: parseFloat(b.points) || 1,
+        fuzzy_threshold: parseInt(b.threshold) || 85,
+      })
+    })
+  })
+
+  items.push(...otherItems.value)
   return items
 }
 
 async function saveKey() {
   const name = keyName.value.trim() || 'Untitled Answer Key'
-
-  let items
-  try {
-    items = collectItems()
-  } catch (e) {
-    showMessage('Invalid Answer Key', e.message)
-    return
-  }
+  const items = collectItems()
   if (!items.length) {
-    showMessage('No Items', 'Add at least one answer key item before saving.')
+    showMessage('No Items', 'Add at least one question before saving.')
     return
   }
 
@@ -194,27 +312,168 @@ async function saveKey() {
 
   creatingNew.value = false
   currentKeyId.value = keyId
-  await showMessage('Saved', 'Answer key saved.')
+  await showMessage('Saved', 'Exam questionnaire saved.')
   reload(keyId) // reloads from storage and refreshes the dirty snapshot
 }
 
 async function deleteAnswerKey() {
   if (currentKeyId.value === null) {
-    showMessage('No Answer Key Selected', 'Select an answer key to delete.')
+    showMessage('No Questionnaire Selected', 'Select an exam questionnaire to delete.')
     return
   }
-  const yes = await showConfirm('Delete Answer Key', 'Delete this answer key? This cannot be undone.')
+  const yes = await showConfirm('Delete Questionnaire', 'Delete this exam questionnaire? This cannot be undone.')
   if (!yes) return
 
   DB.deleteAnswerKey(currentKeyId.value)
   currentKeyId.value = null
   keyName.value = ''
-  rows.value = []
+  mcItems.value = []
+  tfItems.value = []
+  idItems.value = []
+  enumGroups.value = []
+  otherItems.value = []
   savedSnapshot.value = snapshot() // the emptied form is not "unsaved work"
   reload()
 }
 
 const hasKeys = computed(() => keys.value.length > 0)
+
+/* --------------------------------------------------------
+   Preview / Print — a standalone printable document styled
+   after the paper exam template, built from live draft data
+   (not just what's saved), same pattern as the generic
+   template in SettingsView.vue but with real question content.
+   -------------------------------------------------------- */
+
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]))
+}
+
+async function previewQuestionnaire() {
+  // window.open() must happen synchronously, before any await — otherwise
+  // the browser no longer ties it to this click and silently blocks it.
+  const preview = window.open('', '_blank')
+  if (!preview) {
+    showMessage('Preview Blocked', 'Allow pop-ups for this page to preview the questionnaire.')
+    return
+  }
+
+  const items = collectItems()
+  if (!items.length) {
+    preview.close()
+    showMessage('No Items', 'Add at least one question before previewing.')
+    return
+  }
+
+  const missing = items.filter((i) =>
+    !i.question_text.trim() ||
+    (i.type === 'Multiple Choice' && Object.values(i.choices).some((c) => !c.trim())),
+  )
+  if (missing.length) {
+    const proceed = await showConfirm(
+      'Incomplete Questionnaire',
+      `${missing.length} question(s) are missing question text or choices and will print with blank spaces. Continue anyway?`,
+    )
+    if (!proceed) {
+      preview.close()
+      return
+    }
+  }
+
+  preview.document.open()
+  preview.document.write(questionnaireHtml(items))
+  preview.document.close()
+}
+
+function questionnaireHtml(items) {
+  const title = escapeHtml(keyName.value.trim() || 'Untitled Answer Key')
+
+  const sections = [
+    { label: 'I', name: 'Multiple Choice', items: items.filter((i) => i.type === 'Multiple Choice') },
+    { label: 'II', name: 'True or False', items: items.filter((i) => i.type === 'True or False') },
+    { label: 'III', name: 'Identification', items: items.filter((i) => i.type === 'Identification') },
+    { label: 'IV', name: 'Enumeration', items: items.filter((i) => i.type === 'Enumeration') },
+  ].filter((section) => section.items.length)
+
+  let sectionsHtml = ''
+  sections.forEach((section) => {
+    sectionsHtml += `<div class="section"><div class="section-title">${section.label}. ${escapeHtml(section.name)}</div>`
+
+    if (section.name === 'Enumeration') {
+      // Numbering restarts per section for display only, independent of the
+      // items' internal global item_no used for grading position-matching.
+      const groups = new Map()
+      section.items.forEach((item) => {
+        if (!groups.has(item.enum_group)) groups.set(item.enum_group, [])
+        groups.get(item.enum_group).push(item)
+      })
+      let n = 0
+      for (const groupItems of groups.values()) {
+        sectionsHtml += `<div class="q-prompt">${escapeHtml(groupItems[0].question_text)}</div><div class="enum-blanks">`
+        groupItems.forEach(() => {
+          n += 1
+          sectionsHtml += `<div class="blank-line"><span class="blank"></span>${n}.</div>`
+        })
+        sectionsHtml += `</div>`
+      }
+    } else {
+      section.items.forEach((item, idx) => {
+        sectionsHtml += `<div class="q-line"><span class="blank"></span>${idx + 1}. ${escapeHtml(item.question_text)}</div>`
+        if (section.name === 'Multiple Choice') {
+          sectionsHtml += `<div class="choices">`
+            + `<span>a. ${escapeHtml(item.choices.a)}</span>`
+            + `<span>b. ${escapeHtml(item.choices.b)}</span>`
+            + `<span>c. ${escapeHtml(item.choices.c)}</span>`
+            + `<span>d. ${escapeHtml(item.choices.d)}</span>`
+            + `</div>`
+        }
+      })
+    }
+
+    sectionsHtml += `</div>`
+  })
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { max-width: 820px; margin: 28px auto; padding: 0 24px; font-family: Arial, sans-serif; color: #111827; }
+    h1 { margin: 0 0 4px; text-align: center; font-size: 21px; }
+    .subtitle { text-align: center; color: #4b5563; margin-bottom: 24px; }
+    .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; margin-bottom: 8px; }
+    .field-row { display: flex; align-items: flex-end; gap: 8px; white-space: nowrap; }
+    .line { flex: 1; min-height: 1px; margin-bottom: 2px; border-bottom: 1px solid #111827; }
+    .section { margin-top: 22px; }
+    .section-title { font-weight: 700; margin-bottom: 8px; }
+    .q-line, .q-prompt { margin: 10px 0 4px; }
+    .blank { display: inline-block; min-width: 60px; border-bottom: 1px solid #111827; margin-right: 6px; }
+    .choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; margin: 2px 0 10px 66px; }
+    .enum-blanks { margin-left: 20px; }
+    .blank-line { margin: 6px 0; }
+    .print { margin: 0 0 18px; padding: 8px 14px; border: 0; background: #1f6fb2; color: white; cursor: pointer; }
+    @media print { body { margin: 0; max-width: none; } .print { display: none; } }
+  </style>
+</head>
+<body>
+  <button class="print" onclick="window.print()">Print Questionnaire</button>
+  <h1>${title}</h1>
+  <div class="subtitle">Handwritten Objective Examination</div>
+  <div class="fields">
+    <div class="field-row">Name:<div class="line"></div></div>
+    <div class="field-row">Date:<div class="line"></div></div>
+    <div class="field-row">Section:<div class="line"></div></div>
+    <div class="field-row">Score:<div class="line"></div></div>
+  </div>
+  ${sectionsHtml}
+</body>
+</html>`
+}
 
 onMounted(reload)
 </script>
@@ -222,15 +481,19 @@ onMounted(reload)
 <template>
   <div>
     <div class="title-block">
-      <div class="page-title">Answer Key Management</div>
-      <div class="page-subtitle">Create, save, and reuse answer keys.</div>
+      <div class="page-title">Exam Questionnaires</div>
+      <div class="page-subtitle">Type questions and mark answers, grouped the way exams are actually built.</div>
     </div>
 
     <div class="workflow-layout">
       <div class="card workflow-sidebar">
-        <div class="card-title">Saved Answer Keys</div>
-        <button class="btn btn-primary w-full mb-8" title="Create a new answer key." @click="newKey">
-          + New Answer Key
+        <div class="card-title">Saved Questionnaires</div>
+        <button
+          class="btn btn-primary w-full mb-8"
+          title="Create a new exam questionnaire."
+          @click="newKey"
+        >
+          + Add New Exam Questionnaire
         </button>
 
         <div class="list-widget">
@@ -243,84 +506,190 @@ onMounted(reload)
           >
             {{ key.name }}
           </div>
-          <div v-if="!hasKeys" class="list-item muted-text">No answer keys yet.</div>
+          <div v-if="!hasKeys" class="list-item muted-text">No exam questionnaires yet.</div>
         </div>
 
         <button
           class="btn btn-danger w-full mt-8"
-          title="Delete the selected answer key."
+          title="Delete the selected exam questionnaire."
           @click="deleteAnswerKey"
         >
-          Delete Answer Key
+          Delete Questionnaire
         </button>
       </div>
 
       <div class="card workflow-main">
-        <div class="card-title">Answer Key Details</div>
+        <div class="card-title">Questionnaire Details</div>
 
         <div class="form-group">
-          <label class="form-label">Answer Key Name</label>
+          <label class="form-label">Questionnaire Name</label>
           <input
             v-model="keyName"
             type="text"
-            title="Enter a descriptive name for this answer key."
+            title="Enter a descriptive name for this exam questionnaire."
           >
         </div>
 
-        <div class="table-wrapper" style="max-height:400px; overflow-y:auto;">
-          <table>
-            <thead>
-              <tr><th v-for="header in HEADERS" :key="header">{{ header }}</th></tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(row, index) in rows"
-                :key="row.uid"
-                :class="{ selected: row.uid === selectedRow }"
-                @click="selectedRow = row.uid"
+        <!-- I. Multiple Choice -->
+        <div class="qb-section">
+          <div class="card-title">I. Multiple Choice</div>
+          <div v-for="(item, idx) in mcItems" :key="item.uid" class="mc-card">
+            <div class="mc-card-header">
+              <span class="qb-index">{{ idx + 1 }}.</span>
+              <input
+                v-model="item.question_text"
+                type="text"
+                placeholder="Question text"
+                title="Question text"
               >
-                <td style="text-align:center;font-weight:700;">{{ index + 1 }}</td>
-                <td>
-                  <select v-model="row.type" title="Question type">
-                    <option v-for="type in Q_TYPES" :key="type">{{ type }}</option>
-                  </select>
-                </td>
-                <td>
-                  <input
-                    v-model="row.group"
-                    type="text"
-                    style="text-align:center;width:60px;"
-                    title="Enumeration group number"
-                  >
-                </td>
-                <td><input v-model="row.correct" type="text" title="Correct answer(s)"></td>
-                <td><input v-model="row.alternatives" type="text" title="Alternative answers"></td>
-                <td>
-                  <input
-                    v-model.number="row.points"
-                    type="number"
-                    style="text-align:center;width:60px;"
-                    title="Points"
-                  >
-                </td>
-                <td>
-                  <input
-                    v-model.number="row.threshold"
-                    type="number"
-                    style="text-align:center;width:70px;"
-                    title="Fuzzy match threshold %"
-                  >
-                </td>
-              </tr>
-            </tbody>
-          </table>
+              <button
+                class="btn btn-danger btn-small"
+                title="Remove this question."
+                @click="removeMcItem(item.uid)"
+              >
+                ✕
+              </button>
+            </div>
+            <div class="mc-choices">
+              <label v-for="letter in MC_LETTERS" :key="letter" class="mc-choice">
+                <input
+                  v-model="item.correct"
+                  type="radio"
+                  :name="'mc-correct-' + item.uid"
+                  :value="letter"
+                  title="Mark as the correct choice"
+                >
+                <span class="mc-choice-letter">{{ letter }}.</span>
+                <input
+                  v-model="item.choices[letter]"
+                  type="text"
+                  :placeholder="'Choice ' + letter.toUpperCase()"
+                  title="Choice text"
+                >
+              </label>
+            </div>
+            <div class="mc-meta">
+              <label>Points <input v-model.number="item.points" type="number" style="width:60px;" title="Points"></label>
+              <label>Threshold % <input v-model.number="item.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
+            </div>
+          </div>
+          <div v-if="!mcItems.length" class="muted-text mb-8">No multiple choice questions yet.</div>
+          <button class="btn btn-secondary" title="Add a multiple choice question." @click="addMcItem">
+            + Add Multiple Choice Question
+          </button>
+        </div>
+
+        <!-- II. True or False -->
+        <div class="qb-section">
+          <div class="card-title">II. True or False</div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>#</th><th>Statement</th><th>Correct</th><th>Points</th><th>Threshold</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(item, idx) in tfItems" :key="item.uid">
+                  <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
+                  <td><input v-model="item.question_text" type="text" title="Statement text"></td>
+                  <td>
+                    <select v-model="item.correct" title="Correct answer">
+                      <option value="True">True</option>
+                      <option value="False">False</option>
+                    </select>
+                  </td>
+                  <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
+                  <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
+                  <td>
+                    <button class="btn btn-danger btn-small" title="Remove this statement." @click="removeTfItem(item.uid)">✕</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="!tfItems.length" class="muted-text mb-8 mt-8">No true or false statements yet.</div>
+          <button class="btn btn-secondary mt-8" title="Add a true or false statement." @click="addTfItem">
+            + Add True or False Question
+          </button>
+        </div>
+
+        <!-- III. Identification -->
+        <div class="qb-section">
+          <div class="card-title">III. Identification</div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>#</th><th>Question</th><th>Correct Answer</th><th>Alternative Answers</th><th>Points</th><th>Threshold</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(item, idx) in idItems" :key="item.uid">
+                  <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
+                  <td><input v-model="item.question_text" type="text" title="Question text"></td>
+                  <td><input v-model="item.correct" type="text" title="Correct answer"></td>
+                  <td><input v-model="item.alternatives" type="text" title="Alternative answers"></td>
+                  <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
+                  <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
+                  <td>
+                    <button class="btn btn-danger btn-small" title="Remove this question." @click="removeIdItem(item.uid)">✕</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="!idItems.length" class="muted-text mb-8 mt-8">No identification questions yet.</div>
+          <button class="btn btn-secondary mt-8" title="Add an identification question." @click="addIdItem">
+            + Add Identification Question
+          </button>
+        </div>
+
+        <!-- IV. Enumeration -->
+        <div class="qb-section">
+          <div class="card-title">IV. Enumeration</div>
+          <div v-for="(group, idx) in enumGroups" :key="group.uid" class="enum-group">
+            <div class="enum-group-header">
+              <span class="qb-index">{{ idx + 1 }}.</span>
+              <input
+                v-model="group.question_text"
+                type="text"
+                placeholder="Enumeration prompt (e.g. Enumerate 4 examples of...)"
+                title="Enumeration prompt"
+              >
+              <button
+                class="btn btn-danger btn-small"
+                title="Remove this enumeration question."
+                @click="removeEnumGroup(group.uid)"
+              >
+                ✕
+              </button>
+            </div>
+            <div v-for="blank in group.blanks" :key="blank.uid" class="enum-blank-row">
+              <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer">
+              <label>Points <input v-model.number="blank.points" type="number" style="width:60px;" title="Points"></label>
+              <label>Threshold % <input v-model.number="blank.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
+              <button
+                class="btn btn-danger btn-small"
+                title="Remove this answer."
+                :disabled="group.blanks.length <= 1"
+                @click="removeEnumBlank(group, blank.uid)"
+              >
+                ✕
+              </button>
+            </div>
+            <button class="btn btn-secondary btn-small" title="Add another accepted answer." @click="addEnumBlank(group)">
+              + Add Answer
+            </button>
+          </div>
+          <div v-if="!enumGroups.length" class="muted-text mb-8">No enumeration questions yet.</div>
+          <button class="btn btn-secondary" title="Add an enumeration question." @click="addEnumGroup">
+            + Add Enumeration Question
+          </button>
         </div>
 
         <div class="flex gap-8 mt-8 items-center">
-          <button class="btn btn-secondary" title="Add another item row." @click="addRow">Add Item</button>
-          <button class="btn btn-danger" title="Delete the selected item row." @click="deleteRow">Delete Row</button>
+          <button class="btn btn-secondary" title="Preview and print this questionnaire." @click="previewQuestionnaire">
+            Preview / Print Questionnaire
+          </button>
           <div class="spacer"></div>
-          <button class="btn btn-primary" title="Save the answer key." @click="saveKey">Save Key</button>
+          <button class="btn btn-primary" title="Save the exam questionnaire." @click="saveKey">Save Questionnaire</button>
         </div>
       </div>
     </div>

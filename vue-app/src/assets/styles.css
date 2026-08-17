@@ -760,6 +760,48 @@ table input, table select {
 .vertical-actions { flex-direction: column; align-items: stretch; }
 .btn-small { min-height: 32px; padding: 6px 10px; font-size: 12px; }
 
+/* ---------- Questionnaire Builder (Answer Key page) ---------- */
+.qb-section { margin-top: 18px; }
+.qb-section:first-child { margin-top: 0; }
+.mc-card, .enum-group {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.mc-card-header, .enum-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.qb-index { font-weight: 700; min-width: 20px; }
+.mc-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+.mc-choice { display: flex; align-items: center; gap: 6px; }
+.mc-choice input[type="radio"] { width: auto; min-height: auto; accent-color: var(--primary); }
+.mc-choice-letter { font-weight: 600; }
+.mc-meta {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mc-meta label { display: flex; align-items: center; gap: 6px; }
+.enum-blank-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  padding-left: 28px;
+}
+.enum-blank-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
 .settings-tabs {
   overflow-x: auto;
   scrollbar-width: thin;

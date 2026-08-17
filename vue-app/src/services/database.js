@@ -329,6 +329,8 @@ export const DB = (() => {
         item_no: item.item_no,
         type: item.type,
         enum_group: item.enum_group || null,
+        question_text: item.question_text || '',
+        choices: item.choices || null,
         correct_answer: item.correct_answer,
         alternatives: item.alternatives || '',
         points: item.points || 1,

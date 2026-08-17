@@ -6,7 +6,10 @@
    OCR/grading model will be plugged in, so it stays a plain async
    function over (files, answerKeyItems) with progress callbacks.
    Swap the body of _createPlaceholderResult() — and nothing else —
-   once the model is connected.
+   once the model is connected. For Enumeration items specifically,
+   feed the HTR model's per-group detected strings through
+   matchEnumerationAnswers() in ./grading.js rather than comparing
+   answers positionally — see that file for why.
    ============================================================ */
 
 export const MODEL_NAME = 'Model Pending Placeholder'
