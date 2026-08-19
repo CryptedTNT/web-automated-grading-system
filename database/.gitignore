@@ -1,0 +1,16 @@
+# Real credentials. Only .env.example belongs in version control.
+.env
+.env.local
+
+# Database dumps -- these contain password hashes and salts, and once
+# real exams are graded, student names and answers. Keep them off the
+# repository entirely.
+*.sql.gz
+ags_backup_*.sql
+dump.sql
+
+# Uploaded scans, crops, and generated exports.
+storage/
+uploads/
+crops/
+exports/
