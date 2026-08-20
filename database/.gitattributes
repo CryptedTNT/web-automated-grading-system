@@ -1,0 +1,15 @@
+# Keep line endings identical on every machine.
+#
+# tools\migrate.ps1 checksums each migration to detect edits to scripts
+# that have already been applied. If git handed out CRLF on Windows and
+# LF elsewhere, the same untouched file would hash differently per
+# machine and the runner would refuse to start on a fresh clone.
+#
+# The runner also normalises line endings before hashing, so this file is
+# belt and braces -- but it keeps diffs clean too.
+
+*.sql   text eol=lf
+*.ps1   text eol=lf
+*.md    text eol=lf
+*.example text eol=lf
+.gitignore text eol=lf
