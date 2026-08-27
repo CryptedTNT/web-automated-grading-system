@@ -8,7 +8,7 @@
    ============================================================ */
 
 import { defineStore } from 'pinia'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -36,46 +36,48 @@ export const useAppStore = defineStore('app', {
   actions: {
     /**
      * Reset the per-session selections and pick sensible defaults.
-     * Mirrors clearRuntimeSelection() in the original app.js.
+     * Mirrors clearRuntimeSelection() in the original app.js. Reads
+     * through the FastAPI backend now that every page that consumes
+     * these ids (Answer Keys, Upload, Processing, Results) does too --
+     * a localStorage id here would no longer match anything.
      */
-    clearRuntimeSelection() {
+    async clearRuntimeSelection() {
       this.uploadFiles = []
-      this.currentSessionId = DB.latestSessionId()
+      this.currentSessionId = await API.latestSessionId()
       this.selectedStudentResultId = null
       this.selectedFlaggedItemId = null
 
-      const keys = DB.answerKeys()
+      const keys = await API.answerKeys()
       this.selectedAnswerKeyId = keys.length ? keys[0].id : null
     },
 
-    signIn(user) {
+    async signIn(user) {
       this.currentUser = user
-      this.clearRuntimeSelection()
+      await this.clearRuntimeSelection()
     },
 
-    signOut() {
-      DB.setSetting('remember_me', 'false')
-      DB.setSetting('remembered_user_id', '')
+    async signOut() {
+      // Clears the FastAPI session cookie so a stale cookie can't
+      // silently re-authenticate the next visitor on a shared machine.
+      await API.logout().catch(() => {})
       this.currentUser = null
     },
 
     /**
-     * Restore a "remember me" session if one was saved.
+     * Restore a session if the browser still holds a valid one.
      * Returns true when a user was restored.
+     *
+     * Auth now runs through the FastAPI backend (see api.js), which
+     * uses a signed session cookie rather than the old localStorage
+     * "remembered_user_id" scheme — so restoring just means asking the
+     * backend "is this cookie still good?" instead of looking anything
+     * up locally.
      */
-    restoreRememberedUser() {
-      const settings = DB.getSettings()
-      if (settings.remember_me !== 'true' || !settings.remembered_user_id) {
-        return false
-      }
-      try {
-        const user = DB.getUserPublicById(parseInt(settings.remembered_user_id))
-        if (!user) return false
-        this.signIn(user)
-        return true
-      } catch {
-        return false
-      }
+    async restoreRememberedUser() {
+      const user = await API.getCurrentUser()
+      if (!user) return false
+      await this.signIn(user)
+      return true
     },
   },
 })

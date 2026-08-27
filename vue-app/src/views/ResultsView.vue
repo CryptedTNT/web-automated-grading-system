@@ -4,9 +4,9 @@
    Ported from js/results.js.
    ============================================================ */
 
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import { exportSessionToFile } from '@/services/export.js'
@@ -14,22 +14,17 @@ import { exportSessionToFile } from '@/services/export.js'
 const router = useRouter()
 const store = useAppStore()
 
-/* DB reads localStorage, which is not reactive. Bumping this ref is
-   what makes the Refresh button re-read — every computed below
-   depends on it. The original just called refresh() and rebuilt the
-   DOM by hand. */
-const refreshTick = ref(0)
-function refresh() {
-  refreshTick.value++
-}
-
 const query = ref(store.searchTerm || '')
 const section = ref('All Sections')
 
-const sessions = computed(() => {
-  refreshTick.value
-  return DB.sessions()
-})
+/* Reads through the FastAPI backend now (api.js), so session/row data
+   is loaded explicitly rather than being a synchronous computed over
+   localStorage — `sessions`/`rows` are refs, populated by the loaders
+   below and re-populated by watchers when the selected session changes. */
+const sessions = ref([])
+async function loadSessions() {
+  sessions.value = await API.sessions()
+}
 
 /* Mirrors the guard at the top of the original refresh(): if the
    stored session id no longer exists, fall back to the newest one. */
@@ -41,10 +36,33 @@ const currentSession = computed(() => {
   return all.find((s) => s.id === store.currentSessionId) || null
 })
 
-const rows = computed(() => {
-  refreshTick.value
-  return currentSession.value ? DB.studentResults(currentSession.value.id) : []
-})
+const rows = ref([])
+const hasPendingModel = ref(false)
+
+async function loadRows() {
+  const current = currentSession.value
+  if (!current) {
+    rows.value = []
+    hasPendingModel.value = false
+    return
+  }
+  rows.value = await API.studentResults(current.id)
+
+  hasPendingModel.value = false
+  if (current.status === 'Completed') {
+    const itemLists = await Promise.all(rows.value.map((row) => API.resultItems(row.id)))
+    hasPendingModel.value = itemLists.some((items) =>
+      items.some((item) => item.model_used === 'Model Pending Placeholder'),
+    )
+  }
+}
+
+watch(currentSession, loadRows)
+
+async function refresh() {
+  await loadSessions()
+  await loadRows()
+}
 
 const sections = computed(() =>
   [...new Set(rows.value.map((row) => String(row.section || '').trim()).filter(Boolean))].sort(),
@@ -82,14 +100,6 @@ const filteredRows = computed(() => {
 
 const flaggedTotal = computed(() =>
   rows.value.reduce((sum, row) => sum + (Number(row.flagged_count) || 0), 0),
-)
-
-const hasPendingModel = computed(
-  () =>
-    currentSession.value?.status === 'Completed' &&
-    rows.value.some((row) =>
-      DB.resultItems(row.id).some((item) => item.model_used === 'Model Pending Placeholder'),
-    ),
 )
 
 const emptyMessage = computed(() =>
@@ -131,21 +141,27 @@ const sessionId = computed({
 
 /* ---------- Global search ---------- */
 /* Replaces applySearch(): the top-bar box jumps to whichever session
-   contains a match before filtering within it. */
-function jumpToMatchingSession(value) {
+   contains a match before filtering within it. Sequential per-session
+   lookups (not Promise.all) since a match on the first session should
+   stop the search there, same as the original .find(). */
+async function jumpToMatchingSession(value) {
   query.value = String(value || '')
   const needle = query.value.trim().toLowerCase()
   if (!needle) return
 
-  const match = sessions.value.find((session) => {
-    if (String(session.answer_key_name || '').toLowerCase().includes(needle)) return true
-    return DB.studentResults(session.id).some((row) =>
-      [row.student_name, row.section, row.status].join(' ').toLowerCase().includes(needle),
-    )
-  })
-  if (match) {
-    store.currentSessionId = match.id
-    store.selectedStudentResultId = null
+  for (const sessionRow of sessions.value) {
+    let isMatch = String(sessionRow.answer_key_name || '').toLowerCase().includes(needle)
+    if (!isMatch) {
+      const results = await API.studentResults(sessionRow.id)
+      isMatch = results.some((row) =>
+        [row.student_name, row.section, row.status].join(' ').toLowerCase().includes(needle),
+      )
+    }
+    if (isMatch) {
+      store.currentSessionId = sessionRow.id
+      store.selectedStudentResultId = null
+      return
+    }
   }
 }
 
@@ -153,8 +169,12 @@ watch(() => store.searchTerm, jumpToMatchingSession)
 
 /* Typing in the top bar sets searchTerm and *then* routes here, so on
    arrival the watcher above has already missed its edge. Run the jump
-   once for the term we were mounted with. */
-if (store.searchTerm.trim()) jumpToMatchingSession(store.searchTerm)
+   once for the term we were mounted with — after sessions have loaded,
+   since jumpToMatchingSession needs `sessions.value` populated. */
+onMounted(async () => {
+  await loadSessions()
+  if (store.searchTerm.trim()) await jumpToMatchingSession(store.searchTerm)
+})
 
 /* ---------- Actions ---------- */
 async function openSelected() {
@@ -176,8 +196,8 @@ async function reviewFlagged() {
   router.push({ name: 'review' })
 }
 
-function exportSession() {
-  exportSessionToFile(store.currentSessionId)
+async function exportSession() {
+  await exportSessionToFile(store.currentSessionId)
 }
 
 /* ---------- Display helpers ---------- */

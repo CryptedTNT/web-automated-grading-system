@@ -4,9 +4,9 @@
    Ported from Auth.renderForgot() / Auth.submitForgot() in auth.js.
    ============================================================ */
 
-import { ref, computed } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
@@ -28,14 +28,24 @@ const clearInvalid = (key) => invalid.value.delete(key)
 
 const status = ref('Enter your username, security answer, and new password.')
 
-/* The original updated this label on blur. As a computed it simply
-   tracks the username field — no event wiring at all. */
-const questionText = computed(() => {
-  const name = username.value.trim()
-  if (!name) return 'Security question will be checked from the saved local account.'
-  const user = DB.getUserByUsername(name)
-  return user?.security_question || 'Security question will be checked from the saved local account.'
-})
+/* The original updated this label on blur; now it's a ref refreshed
+   by a watcher since the lookup is a network call and can't run
+   inside a computed. */
+const DEFAULT_QUESTION_TEXT = 'Security question will be checked from your account.'
+const questionText = ref(DEFAULT_QUESTION_TEXT)
+watch(
+  username,
+  async (value) => {
+    const name = value.trim()
+    if (!name) {
+      questionText.value = DEFAULT_QUESTION_TEXT
+      return
+    }
+    const user = await API.getUserByUsername(name)
+    questionText.value = user?.security_question || DEFAULT_QUESTION_TEXT
+  },
+  { immediate: true },
+)
 
 async function submit() {
   const blanks = []
@@ -50,7 +60,7 @@ async function submit() {
     return
   }
 
-  const pwError = DB.passwordError(newPassword.value)
+  const pwError = API.passwordError(newPassword.value)
   if (pwError) {
     invalid.value = new Set(['newPassword'])
     await showMessage('Weak Password', pwError)
@@ -65,7 +75,7 @@ async function submit() {
 
   let ok = false
   try {
-    ok = DB.resetPasswordWithSecurityAnswer(username.value.trim(), answer.value.trim(), newPassword.value)
+    ok = await API.resetPasswordWithSecurityAnswer(username.value.trim(), answer.value.trim(), newPassword.value)
   } catch (e) {
     await showMessage('Reset Failed', e.message)
     return

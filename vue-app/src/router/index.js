@@ -9,7 +9,7 @@
 
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useAppStore } from '@/stores/app.js'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 
 /* Views are lazy-loaded so each page becomes its own chunk and the
    first paint does not wait on code the teacher has not opened. */
@@ -45,17 +45,19 @@ const router = createRouter({
   routes,
 })
 
-/* Replaces _showStartPage(): decide where an unauthenticated visitor lands. */
-router.beforeEach((to) => {
+/* Replaces _showStartPage(): decide where an unauthenticated visitor lands.
+   Async now — auth lives behind the FastAPI backend (api.js), a network
+   call rather than a synchronous localStorage read. */
+router.beforeEach(async (to) => {
   const store = useAppStore()
 
   if (to.meta.public) return true
   if (store.isSignedIn) return true
 
-  // Try the saved "remember me" session before bouncing to sign-in.
-  if (store.restoreRememberedUser()) return true
+  // Try the saved session cookie before bouncing to sign-in.
+  if (await store.restoreRememberedUser()) return true
 
-  return DB.hasUser() ? { name: 'login' } : { name: 'setup' }
+  return (await API.hasUser()) ? { name: 'login' } : { name: 'setup' }
 })
 
 export default router

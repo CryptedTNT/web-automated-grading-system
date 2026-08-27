@@ -10,7 +10,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app.js'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import DialogHost from '@/components/DialogHost.vue'
 
 const route = useRoute()
@@ -80,10 +80,10 @@ watch(
 )
 
 /* ---------- Logout ---------- */
-function logout() {
-  store.signOut()
+async function logout() {
+  await store.signOut()
   router.push(
-    DB.hasUser()
+    (await API.hasUser())
       ? { name: 'login', query: { status: 'loggedout' } }
       : { name: 'setup' },
   )

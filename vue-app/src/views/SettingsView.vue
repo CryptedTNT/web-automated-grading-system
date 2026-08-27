@@ -13,7 +13,12 @@
    class-toggling loops in _attachTabs().
    ============================================================ */
 
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { API } from '@/services/api.js'
+// Theme is a device display preference, not account data, and
+// loadSavedTheme() in main.js runs before login exists -- so it (and
+// this tab's saved-theme readout) deliberately stay on localStorage
+// rather than the authenticated backend. See services/theme.js.
 import { DB } from '@/services/database.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
@@ -78,7 +83,7 @@ async function saveAccount() {
     )
     return
   }
-  const newPwError = changingPassword ? DB.passwordError(next) : null
+  const newPwError = changingPassword ? API.passwordError(next) : null
   if (newPwError) {
     markInvalid('next')
     await showMessage('Weak Password', newPwError)
@@ -91,7 +96,7 @@ async function saveAccount() {
   }
 
   try {
-    if (changingPassword && !DB.updateUserPassword(user.id, current, next)) {
+    if (changingPassword && !(await API.updateUserPassword(user.id, current, next))) {
       markInvalid('current')
       await showMessage('Incorrect Password', 'The current password is incorrect.')
       return
@@ -99,7 +104,7 @@ async function saveAccount() {
     /* Assigning to the store is all that is needed — the sidebar and
        top bar bind to currentUser, so the old updateUserLabels() call
        has no equivalent here. */
-    store.currentUser = DB.updateUserProfile(user.id, name, account.value.institution.trim())
+    store.currentUser = await API.updateUserProfile(user.id, name, account.value.institution.trim())
     passwords.value = { current: '', next: '', confirm: '' }
     account.value = {
       full_name: store.currentUser.full_name,
@@ -116,7 +121,10 @@ async function saveAccount() {
 
 /* --------------------------------------------------- Export prefs */
 
-const prefs = ref(DB.getExportPreferences())
+const prefs = ref({ folder_label: 'Downloads', filename_format: '' })
+onMounted(async () => {
+  prefs.value = await API.getExportPreferences()
+})
 const filenameInvalid = ref(false)
 
 const PREF_TOGGLES = [
@@ -134,7 +142,7 @@ async function saveExportPreferences() {
     await showMessage('Filename Required', 'Enter an export filename format before saving.')
     return
   }
-  prefs.value = DB.setExportPreferences({
+  prefs.value = await API.setExportPreferences({
     ...prefs.value,
     folder_label: prefs.value.folder_label.trim() || 'Downloads',
   })

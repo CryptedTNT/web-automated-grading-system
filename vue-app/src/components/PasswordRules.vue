@@ -6,13 +6,13 @@
    prop, so the list simply follows the input. */
 
 import { computed } from 'vue'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 
 const props = defineProps({
   password: { type: String, default: '' },
 })
 
-const rules = computed(() => DB.checkPassword(props.password).results)
+const rules = computed(() => API.checkPassword(props.password).results)
 </script>
 
 <template>

@@ -6,7 +6,7 @@
 
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import HeroPanel from '@/components/HeroPanel.vue'
@@ -50,22 +50,24 @@ async function submit() {
     return
   }
 
-  const user = DB.verifyUser(username.value.trim(), password.value)
+  const user = await API.verifyUser(username.value.trim(), password.value)
   if (!user) {
     /* Which of the two was wrong is deliberately not revealed to the
        user, but the username is only flagged when no such account
        exists — otherwise the password is the one to re-check. */
-    invalidUsername.value = !DB.getUserByUsername(username.value.trim())
+    invalidUsername.value = !(await API.getUserByUsername(username.value.trim()))
     invalidPassword.value = true
     failureMessage.value = 'Invalid username or password.'
     await showMessage('Login Failed', 'Invalid username or password.')
     return
   }
 
-  DB.setSetting('remember_me', remember.value ? 'true' : 'false')
-  DB.setSetting('remembered_user_id', remember.value ? user.id : '')
+  // "Remember me" no longer needs a client-held id — the backend's
+  // session cookie is what persists the sign-in (see api.js). `remember`
+  // is left as a UI-only preference for now (not wired to cookie
+  // lifetime); unchecking it does not shorten the session early.
 
-  store.signIn(user)
+  await store.signIn(user)
   router.push({ name: 'dashboard' })
 }
 

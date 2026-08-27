@@ -6,19 +6,25 @@
    Read-only: the Review Flagged page is where items get edited.
    ============================================================ */
 
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 
 const router = useRouter()
 const store = useAppStore()
 
-const result = computed(() =>
-  store.selectedStudentResultId ? DB.getStudentResultById(store.selectedStudentResultId) : null,
-)
+const result = ref(null)
+const items = ref([])
 
-const items = computed(() => (result.value ? DB.resultItems(result.value.id) : []))
+watch(
+  () => store.selectedStudentResultId,
+  async (id) => {
+    result.value = id ? await API.getStudentResultById(id) : null
+    items.value = result.value ? await API.resultItems(result.value.id) : []
+  },
+  { immediate: true },
+)
 
 const hasPendingModel = computed(() =>
   items.value.some((item) => item.model_used === 'Model Pending Placeholder'),

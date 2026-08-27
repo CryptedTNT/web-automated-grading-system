@@ -8,7 +8,7 @@
    ============================================================ */
 
 import { ref, computed, onMounted } from 'vue'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
 
 const Q_TYPES = ['Multiple Choice', 'True or False', 'Identification', 'Enumeration']
@@ -123,23 +123,23 @@ async function confirmDiscard() {
   )
 }
 
-function reload(selectKeyId) {
-  keys.value = DB.answerKeys()
+async function reload(selectKeyId) {
+  keys.value = await API.answerKeys()
   const targetId = selectKeyId || currentKeyId.value || keys.value[0]?.id || null
-  if (targetId && !creatingNew.value) loadKey(targetId)
+  if (targetId && !creatingNew.value) await loadKey(targetId)
   // Nothing to load (no keys yet, or the last one was just deleted):
   // baseline the snapshot so an untouched empty form is not "dirty".
   else savedSnapshot.value = snapshot()
 }
 
-function loadKey(keyId) {
+async function loadKey(keyId) {
   const key = keys.value.find((k) => k.id === keyId)
   if (!key) return
   creatingNew.value = false
   currentKeyId.value = keyId
   keyName.value = key.name
 
-  const items = DB.answerKeyItems(keyId)
+  const items = await API.answerKeyItems(keyId)
   mcItems.value = items.filter((i) => i.type === 'Multiple Choice').map(makeMcItem)
   tfItems.value = items.filter((i) => i.type === 'True or False').map(makeTfItem)
   idItems.value = items.filter((i) => i.type === 'Identification').map(makeIdItem)
@@ -163,7 +163,7 @@ function loadKey(keyId) {
 async function selectKey(keyId) {
   if (keyId === currentKeyId.value && !creatingNew.value) return
   if (!(await confirmDiscard())) return
-  loadKey(keyId)
+  await loadKey(keyId)
 }
 
 /* Never reuse a name that already exists — `keys.length + 1` produced a
@@ -302,18 +302,26 @@ async function saveKey() {
   }
 
   let keyId
-  if (currentKeyId.value === null || creatingNew.value) {
-    keyId = DB.createAnswerKey(name, '')
-  } else {
-    keyId = currentKeyId.value
-    DB.updateAnswerKey(keyId, name, '')
+  try {
+    if (currentKeyId.value === null || creatingNew.value) {
+      keyId = await API.createAnswerKey(name, '')
+    } else {
+      keyId = currentKeyId.value
+      await API.updateAnswerKey(keyId, name, '')
+    }
+    await API.replaceAnswerKeyItems(keyId, items)
+  } catch (e) {
+    // Without this, a network/backend failure here failed silently --
+    // the button click did nothing visible at all, which is
+    // indistinguishable from the app being broken.
+    await showMessage('Save Failed', e.message || 'The exam questionnaire could not be saved. Check that the server is running and try again.')
+    return
   }
-  DB.replaceAnswerKeyItems(keyId, items)
 
   creatingNew.value = false
   currentKeyId.value = keyId
   await showMessage('Saved', 'Exam questionnaire saved.')
-  reload(keyId) // reloads from storage and refreshes the dirty snapshot
+  await reload(keyId) // reloads from storage and refreshes the dirty snapshot
 }
 
 async function deleteAnswerKey() {
@@ -324,7 +332,12 @@ async function deleteAnswerKey() {
   const yes = await showConfirm('Delete Questionnaire', 'Delete this exam questionnaire? This cannot be undone.')
   if (!yes) return
 
-  DB.deleteAnswerKey(currentKeyId.value)
+  try {
+    await API.deleteAnswerKey(currentKeyId.value)
+  } catch (e) {
+    await showMessage('Delete Failed', e.message || 'The exam questionnaire could not be deleted. Check that the server is running and try again.')
+    return
+  }
   currentKeyId.value = null
   keyName.value = ''
   mcItems.value = []
@@ -333,7 +346,7 @@ async function deleteAnswerKey() {
   enumGroups.value = []
   otherItems.value = []
   savedSnapshot.value = snapshot() // the emptied form is not "unsaved work"
-  reload()
+  await reload()
 }
 
 const hasKeys = computed(() => keys.value.length > 0)
@@ -387,6 +400,25 @@ async function previewQuestionnaire() {
   preview.document.close()
 }
 
+/* Instruction line printed under each section heading. The underline
+   blank before every question number is kept regardless (see .blank
+   below): that's what the YOLO detector is trained to find on a
+   printed/scanned sheet, so it can't be dropped for a cosmetic pass. */
+const SECTION_META = {
+  'Multiple Choice': {
+    instruction: 'Write the correct answer in the space provided.',
+  },
+  'True or False': {
+    instruction: 'Write <strong>TRUE</strong> if the statement is correct, and <strong>FALSE</strong> if the statement is wrong.',
+  },
+  Identification: {
+    instruction: 'Write the correct answer in the space provided.',
+  },
+  Enumeration: {
+    instruction: 'Enumerate the answers needed for each number.',
+  },
+}
+
 function questionnaireHtml(items) {
   const title = escapeHtml(keyName.value.trim() || 'Untitled Answer Key')
 
@@ -399,7 +431,10 @@ function questionnaireHtml(items) {
 
   let sectionsHtml = ''
   sections.forEach((section) => {
-    sectionsHtml += `<div class="section"><div class="section-title">${section.label}. ${escapeHtml(section.name)}</div>`
+    const meta = SECTION_META[section.name]
+    sectionsHtml += `<div class="section">
+      <div class="section-title">${section.label}. ${escapeHtml(section.name)}</div>
+      <div class="section-instruction">${meta.instruction}</div>`
 
     if (section.name === 'Enumeration') {
       // Numbering restarts per section for display only, independent of the
@@ -409,12 +444,12 @@ function questionnaireHtml(items) {
         if (!groups.has(item.enum_group)) groups.set(item.enum_group, [])
         groups.get(item.enum_group).push(item)
       })
-      let n = 0
+      let groupNo = 0
       for (const groupItems of groups.values()) {
-        sectionsHtml += `<div class="q-prompt">${escapeHtml(groupItems[0].question_text)}</div><div class="enum-blanks">`
+        groupNo += 1
+        sectionsHtml += `<div class="q-prompt">${groupNo}. ${escapeHtml(groupItems[0].question_text)}</div><div class="enum-blanks">`
         groupItems.forEach(() => {
-          n += 1
-          sectionsHtml += `<div class="blank-line"><span class="blank"></span>${n}.</div>`
+          sectionsHtml += `<div class="blank-line">- <span class="blank"></span></div>`
         })
         sectionsHtml += `</div>`
       }
@@ -443,27 +478,35 @@ function questionnaireHtml(items) {
   <title>${title}</title>
   <style>
     * { box-sizing: border-box; }
-    body { max-width: 820px; margin: 28px auto; padding: 0 24px; font-family: Arial, sans-serif; color: #111827; }
-    h1 { margin: 0 0 4px; text-align: center; font-size: 21px; }
-    .subtitle { text-align: center; color: #4b5563; margin-bottom: 24px; }
-    .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; margin-bottom: 8px; }
-    .field-row { display: flex; align-items: flex-end; gap: 8px; white-space: nowrap; }
+    body {
+      max-width: 820px; margin: 28px auto; padding: 0 24px;
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+      color: #1f2937; line-height: 1.5;
+    }
+    .fields {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px;
+      margin: 12px 0 24px;
+    }
+    .field-row { display: flex; align-items: flex-end; gap: 8px; white-space: nowrap; font-size: 13px; color: #4b5563; }
     .line { flex: 1; min-height: 1px; margin-bottom: 2px; border-bottom: 1px solid #111827; }
     .section { margin-top: 22px; }
-    .section-title { font-weight: 700; margin-bottom: 8px; }
+    .section-title { font-weight: 700; font-size: 14px; margin-bottom: 3px; color: #000; }
+    .section-instruction { font-size: 12.5px; color: #374151; margin-bottom: 10px; }
     .q-line, .q-prompt { margin: 10px 0 4px; }
     .blank { display: inline-block; min-width: 60px; border-bottom: 1px solid #111827; margin-right: 6px; }
-    .choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; margin: 2px 0 10px 66px; }
+    .choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; margin: 2px 0 10px 66px; color: #4b5563; font-size: 13px; }
     .enum-blanks { margin-left: 20px; }
     .blank-line { margin: 6px 0; }
-    .print { margin: 0 0 18px; padding: 8px 14px; border: 0; background: #1f6fb2; color: white; cursor: pointer; }
-    @media print { body { margin: 0; max-width: none; } .print { display: none; } }
+    .print { margin: 0 0 18px; padding: 9px 16px; border: 0; border-radius: 6px; background: #1f6fb2; color: white; cursor: pointer; font-weight: 600; }
+    .print:hover { background: #185c96; }
+    @media print {
+      body { margin: 0; max-width: none; }
+      .print { display: none; }
+    }
   </style>
 </head>
 <body>
   <button class="print" onclick="window.print()">Print Questionnaire</button>
-  <h1>${title}</h1>
-  <div class="subtitle">Handwritten Objective Examination</div>
   <div class="fields">
     <div class="field-row">Name:<div class="line"></div></div>
     <div class="field-row">Date:<div class="line"></div></div>

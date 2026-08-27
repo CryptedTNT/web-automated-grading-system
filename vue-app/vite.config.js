@@ -12,4 +12,15 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  server: {
+    // Proxies /api/* to the FastAPI dev server (backend/) so fetch()
+    // calls in src/services/api.js look same-origin to the browser —
+    // no CORS configuration needed for local development.
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
 })

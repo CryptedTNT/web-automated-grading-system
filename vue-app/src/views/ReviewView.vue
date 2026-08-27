@@ -10,15 +10,12 @@
 
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 
 const router = useRouter()
 const store = useAppStore()
-
-/* localStorage is not reactive; saving bumps this to re-read. */
-const tick = ref(0)
 
 const notice = ref('')
 const lastReviewedResultId = ref(null)
@@ -29,47 +26,51 @@ const manualInput = ref(null)
 
 const sessionId = computed(() => store.currentSessionId)
 
+/* Reads through the FastAPI backend now (api.js) -- currentItem/result
+   are refs loaded by loadCurrentItem(), called on mount, whenever the
+   session changes, and after every save, rather than a synchronous
+   computed over localStorage. */
+const currentItem = ref(null)
+const result = ref(null)
+
 /* Prefer the student already selected on the Results page, but only
-   if they belong to this session — otherwise sweep the whole session. */
-const currentItem = computed(() => {
-  tick.value
+   if they belong to this session — otherwise sweep the whole session.
+   Called on mount, whenever the session changes, and again after every
+   save (there is no more reactive `tick` to trigger a computed re-read). */
+async function loadCurrentItem() {
   const selected = store.selectedStudentResultId
-    ? DB.getStudentResultById(store.selectedStudentResultId)
+    ? await API.getStudentResultById(store.selectedStudentResultId)
     : null
   const validResultId = selected?.session_id === sessionId.value ? selected.id : null
-  return DB.getFirstFlaggedItem(validResultId, sessionId.value)
-})
+  const item = await API.getFirstFlaggedItem(validResultId, sessionId.value)
+  currentItem.value = item
 
-const result = computed(() =>
-  currentItem.value ? DB.getStudentResultById(currentItem.value.student_result_id) : null,
-)
+  if (item) {
+    result.value = await API.getStudentResultById(item.student_result_id)
+    store.selectedStudentResultId = result.value?.id || null
+  } else {
+    result.value = null
+  }
+  // Each item gets a fresh form, exactly as the full re-render did.
+  action.value = 'override'
+  manualAnswer.value = item?.correct_answer || ''
+  invalid.value = false
+}
 
 const autoStatus = computed(() =>
   currentItem.value ? currentItem.value.auto_status || currentItem.value.status : '',
 )
 
-/* The original assigned App.state.selectedStudentResultId in the
-   middle of building its HTML. Kept as an effect rather than a
-   side effect inside a computed. */
+/* Switching sessions restarts the review run. */
 watch(
-  currentItem,
-  (item) => {
-    store.selectedStudentResultId = item
-      ? DB.getStudentResultById(item.student_result_id)?.id || null
-      : store.selectedStudentResultId
-    // Each item gets a fresh form, exactly as the full re-render did.
-    action.value = 'override'
-    manualAnswer.value = item?.correct_answer || ''
-    invalid.value = false
+  sessionId,
+  () => {
+    lastReviewedResultId.value = null
+    notice.value = ''
+    loadCurrentItem()
   },
   { immediate: true },
 )
-
-/* Switching sessions restarts the review run. */
-watch(sessionId, () => {
-  lastReviewedResultId.value = null
-  notice.value = ''
-})
 
 function statusClass(status) {
   if (status === 'OK') return 'badge-success'
@@ -128,14 +129,14 @@ async function saveOverride() {
   }
 
   const reviewedResultId = item.student_result_id
-  DB.updateResultItem(item.id, updates)
-  DB.recalculateStudentResult(reviewedResultId)
+  await API.updateResultItem(item.id, updates)
+  // No separate recalculate call -- the backend view derives totals
+  // from item scores automatically, nothing to trigger.
   lastReviewedResultId.value = reviewedResultId
 
-  const nextItem = DB.getFirstFlaggedItem(reviewedResultId, sessionId.value)
-  store.selectedStudentResultId = nextItem ? nextItem.student_result_id : reviewedResultId
-  tick.value++
-  if (nextItem) notice.value = 'Review saved. The next flagged item is ready.'
+  store.selectedStudentResultId = reviewedResultId
+  await loadCurrentItem()
+  if (currentItem.value) notice.value = 'Review saved. The next flagged item is ready.'
 }
 
 function openLastStudent() {

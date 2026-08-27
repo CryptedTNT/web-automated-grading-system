@@ -12,10 +12,9 @@
 
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { useProcessingStore } from '@/stores/processing.js'
-import { MODEL_NAME } from '@/services/processing.js'
 
 const router = useRouter()
 const store = useAppStore()
@@ -23,14 +22,27 @@ const job = useProcessingStore()
 
 const logBox = ref(null)
 
-onMounted(() => job.syncQueue())
+const answerKey = ref(null)
+const keyItems = ref([])
+
+async function loadJobDetails() {
+  if (!store.selectedAnswerKeyId) {
+    answerKey.value = null
+    keyItems.value = []
+    return
+  }
+  const keys = await API.answerKeys()
+  answerKey.value = keys.find((key) => key.id === store.selectedAnswerKeyId) || null
+  keyItems.value = answerKey.value ? await API.answerKeyItems(answerKey.value.id) : []
+}
+
+onMounted(() => {
+  job.syncQueue()
+  loadJobDetails()
+})
+watch(() => store.selectedAnswerKeyId, loadJobDetails)
 
 const files = computed(() => store.uploadFiles)
-
-const answerKey = computed(
-  () => DB.answerKeys().find((key) => key.id === store.selectedAnswerKeyId) || null,
-)
-const keyItems = computed(() => (answerKey.value ? DB.answerKeyItems(answerKey.value.id) : []))
 
 const canOpenResults = computed(() => Boolean(job.sessionId || store.currentSessionId))
 
@@ -74,13 +86,13 @@ function openResults() {
     <div class="title-block">
       <div class="page-title">Processing Answer Sheets</div>
       <div class="page-subtitle">
-        Run the model-ready placeholder workflow and create reviewable grading records.
+        Run automated grading and create reviewable results.
       </div>
     </div>
 
     <div class="processing-banner">
-      <span class="badge badge-blue">{{ MODEL_NAME }}</span>
-      <span>Outputs remain flagged until reviewed or replaced by the future OCR model.</span>
+      <span class="badge badge-blue">Automated Grading</span>
+      <span>Low-confidence or uncertain answers are flagged for your review.</span>
     </div>
 
     <div class="workflow-layout processing-layout">

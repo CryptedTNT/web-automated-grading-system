@@ -1,0 +1,17 @@
+.env
+venv/
+__pycache__/
+*.pyc
+storage/uploads/*
+storage/crops/*
+storage/exports/*
+!storage/uploads/.gitkeep
+!storage/crops/.gitkeep
+!storage/exports/.gitkeep
+
+# Trained model weights -- large binaries, not source. Hand these off
+# separately (shared drive, Git LFS, etc.) rather than committing them.
+models/yolo/*
+models/htr/*
+!models/yolo/.gitkeep
+!models/htr/.gitkeep
