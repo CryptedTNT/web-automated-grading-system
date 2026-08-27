@@ -6,7 +6,7 @@
 
 import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
@@ -50,7 +50,7 @@ async function submit() {
     return
   }
 
-  const pwError = DB.passwordError(form.password)
+  const pwError = API.passwordError(form.password)
   if (pwError) {
     invalid.value = new Set(['password'])
     await showMessage('Weak Password', pwError)
@@ -64,7 +64,7 @@ async function submit() {
   }
 
   try {
-    DB.createUser(
+    await API.createUser(
       form.fullname,
       form.institution,
       form.username,

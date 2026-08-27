@@ -8,22 +8,48 @@
    same reason.
    ============================================================ */
 
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { exportSessionToFile } from '@/services/export.js'
 
 const router = useRouter()
 const store = useAppStore()
 
-/* localStorage is not reactive; bumping this re-reads it. */
-const refreshTick = ref(0)
+/* Reads through the FastAPI backend now (api.js), so sessions/stats/
+   prefs are refs loaded explicitly rather than a synchronous computed
+   over localStorage. refresh() re-runs the same loader. */
+const sessions = ref([])
+const statsBySession = ref(new Map())
 
-const sessions = computed(() => {
-  refreshTick.value
-  return DB.sessions()
-})
+function toNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : 0
+}
+
+/* Sheets/average/flagged per session, computed once from a single
+   fetch of every result across every session's sheets, then grouped --
+   avoids one API round trip per session row. */
+async function loadSessions() {
+  const rows = await API.sessions()
+  sessions.value = rows
+
+  const resultLists = await Promise.all(rows.map((session) => API.studentResults(session.id)))
+  const stats = new Map()
+  rows.forEach((session, index) => {
+    const results = resultLists[index]
+    const percentSum = results.reduce((sum, r) => sum + toNumber(r.percentage), 0)
+    const flagged = results.reduce((sum, r) => sum + toNumber(r.flagged_count), 0)
+    stats.set(session.id, {
+      sheets: results.length,
+      average: results.length ? Math.round((percentSum / results.length) * 100) / 100 : 0,
+      flagged,
+    })
+  })
+  statsBySession.value = stats
+}
+
+onMounted(loadSessions)
 
 /* Mirrors the guard at the top of the original refresh(). */
 const selectedSession = computed(() => {
@@ -32,39 +58,6 @@ const selectedSession = computed(() => {
     store.currentSessionId = all[0]?.id || null
   }
   return all.find((s) => s.id === store.currentSessionId) || null
-})
-
-function toNumber(value) {
-  return Number.isFinite(Number(value)) ? Number(value) : 0
-}
-
-/* The original computed sheets/average/flagged twice — once for the
-   stat cards and again inside _sessionRows(). One helper now.
-
-   DB.studentResults() re-reads and re-parses the whole results table on
-   every call, so calling it once per session row meant up to 100 full
-   parses per render. Grouping a single read by session id keeps it to
-   one, which matters once a tester has accumulated sessions. */
-const statsBySession = computed(() => {
-  refreshTick.value
-  const grouped = new Map()
-  for (const row of DB.studentResults()) {
-    const bucket = grouped.get(row.session_id) || { sheets: 0, percentSum: 0, flagged: 0 }
-    bucket.sheets += 1
-    bucket.percentSum += toNumber(row.percentage)
-    bucket.flagged += toNumber(row.flagged_count)
-    grouped.set(row.session_id, bucket)
-  }
-
-  const stats = new Map()
-  for (const [id, bucket] of grouped) {
-    stats.set(id, {
-      sheets: bucket.sheets,
-      average: bucket.sheets ? Math.round((bucket.percentSum / bucket.sheets) * 100) / 100 : 0,
-      flagged: bucket.flagged,
-    })
-  }
-  return stats
 })
 
 const EMPTY_STATS = { sheets: 0, average: 0, flagged: 0 }
@@ -82,9 +75,9 @@ const sessionRows = computed(() =>
   sessions.value.slice(0, 100).map((session) => ({ ...session, ...sessionStats(session.id) })),
 )
 
-const prefs = computed(() => {
-  refreshTick.value
-  return DB.getExportPreferences()
+const prefs = ref({ folder_label: 'Downloads', filename_format: '' })
+onMounted(async () => {
+  prefs.value = await API.getExportPreferences()
 })
 
 const sessionId = computed({
@@ -104,8 +97,8 @@ function viewSession(id) {
   router.push({ name: 'results' })
 }
 
-function exportSelected() {
-  exportSessionToFile(store.currentSessionId)
+async function exportSelected() {
+  await exportSessionToFile(store.currentSessionId)
 }
 
 function statusClass(status) {
@@ -146,7 +139,7 @@ function statusClass(status) {
       <div class="stat-card">
         <div class="stat-label">All Sessions</div>
         <div class="stat-value">{{ sessions.length }}</div>
-        <div class="stat-delta">Stored in this browser</div>
+        <div class="stat-delta">Stored in your account</div>
       </div>
     </div>
 

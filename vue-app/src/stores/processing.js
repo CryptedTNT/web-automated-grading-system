@@ -9,8 +9,7 @@
    ============================================================ */
 
 import { defineStore } from 'pinia'
-import { DB } from '@/services/database.js'
-import { runProcessingJob } from '@/services/processing.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from './app.js'
 import { showMessage } from '@/services/dialog.js'
 
@@ -111,7 +110,7 @@ export const useProcessingStore = defineStore('processing', {
         await showMessage('Answer Key Required', 'Select an answer key before processing.')
         return null
       }
-      const answerKeyItems = DB.answerKeyItems(keyId)
+      const answerKeyItems = await API.answerKeyItems(keyId)
       if (!answerKeyItems.length) {
         await showMessage('Answer Key Is Empty', 'The selected answer key must contain at least one valid item.')
         return null
@@ -121,9 +120,9 @@ export const useProcessingStore = defineStore('processing', {
       this.status = 'running'
       this.total = files.length
       this.sourceSignature = queueSignature(keyId, files)
-      this.appendLog('Starting the model-pending processing adapter.')
+      this.appendLog('Starting processing.')
 
-      runningPromise = this._run(files, keyId, answerKeyItems)
+      runningPromise = this._run(files, keyId)
       try {
         return await runningPromise
       } finally {
@@ -131,40 +130,40 @@ export const useProcessingStore = defineStore('processing', {
       }
     },
 
-    async _run(files, keyId, answerKeyItems) {
+    /* Each file is its own request to POST /sessions/<id>/sheets --
+       that call blocks until the real YOLO+TrOCR grading for that one
+       sheet has committed server-side, so looping file-by-file (rather
+       than one batched request for the whole queue) is what lets this
+       progress bar/log reflect real per-file completions instead of a
+       single all-or-nothing wait. */
+    async _run(files, keyId) {
       let sessionId = null
       const app = useAppStore()
 
       try {
-        sessionId = DB.createSession(keyId, sourceLabel(files))
+        sessionId = await API.createSession(keyId, sourceLabel(files))
         this.sessionId = sessionId
         app.currentSessionId = sessionId
         this.appendLog(`Session #${sessionId} created with ${files.length} image(s).`)
 
-        await runProcessingJob(files, answerKeyItems, {
-          onFileStart: ({ index, total, file }) => {
-            this.currentFile = file?.name || file?.file?.name || 'answer-sheet'
-            this.appendLog(`[${index + 1}/${total}] Starting ${this.currentFile}.`)
-          },
-          onProgress: ({ completed, percent }) => {
-            this.completed = completed
-            this.progress = percent
-          },
-          onLog: ({ message, level }) => this.appendLog(message, level),
-          onFileComplete: ({ result }) => persistResult(sessionId, result),
-          shouldCancel: () => this.cancelRequested,
-          onCancel: ({ completed, total }) =>
-            this.appendLog(`Cancelled after ${completed} of ${total} file(s).`, 'error'),
-          onComplete: ({ total }) => this.appendLog(`All ${total} placeholder record(s) were saved.`, 'success'),
-          onError: ({ error, completed, total }) =>
-            this.appendLog(
-              `Processing stopped after ${completed} of ${total} files: ${error.message}`,
-              'error',
-            ),
-        })
+        for (let index = 0; index < files.length; index += 1) {
+          if (this.cancelRequested) {
+            this.appendLog(`Cancelled after ${index} of ${files.length} file(s).`, 'error')
+            break
+          }
+          const entry = files[index]
+          this.currentFile = entry?.name || entry?.file?.name || 'answer-sheet'
+          this.appendLog(`[${index + 1}/${files.length}] Uploading and grading ${this.currentFile}.`)
+
+          await API.uploadSheet(sessionId, entry.file)
+
+          this.completed = index + 1
+          this.progress = Math.round((this.completed / files.length) * 100)
+          this.appendLog(`[${index + 1}/${files.length}] ${this.currentFile} graded.`, 'success')
+        }
 
         if (this.cancelRequested) {
-          DB.updateSessionStatus(sessionId, 'Cancelled')
+          await API.updateSessionStatus(sessionId, 'Cancelled')
           this.status = 'cancelled'
           this.currentFile = ''
           /* The queue is left intact so the run can simply be restarted. */
@@ -175,7 +174,7 @@ export const useProcessingStore = defineStore('processing', {
           return sessionId
         }
 
-        DB.updateSessionStatus(sessionId, 'Completed')
+        await API.updateSessionStatus(sessionId, 'Completed')
         this.status = 'completed'
         this.progress = 100
         this.completed = this.total
@@ -186,7 +185,7 @@ export const useProcessingStore = defineStore('processing', {
         this.appendLog(`Session #${sessionId} completed. Open Results to continue.`, 'success')
         return sessionId
       } catch (error) {
-        if (sessionId) DB.updateSessionStatus(sessionId, 'Failed')
+        if (sessionId) await API.updateSessionStatus(sessionId, 'Failed')
         this.status = 'error'
         this.error = error.message || 'The processing job failed.'
         this.currentFile = ''
@@ -195,21 +194,6 @@ export const useProcessingStore = defineStore('processing', {
     },
   },
 })
-
-function persistResult(sessionId, result) {
-  const resultId = DB.addStudentResult(
-    sessionId,
-    result.student_name,
-    result.section,
-    result.image_path,
-    result.score,
-    result.total,
-    result.percentage,
-    result.flagged_count,
-    result.status,
-  )
-  result.items.forEach((item) => DB.addResultItem(resultId, item))
-}
 
 function queueSignature(answerKeyId, files) {
   const entries = files.map(

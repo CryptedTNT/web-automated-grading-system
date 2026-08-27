@@ -11,7 +11,7 @@
 
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 
@@ -24,7 +24,7 @@ const fileInput = ref(null)
 const folderInput = ref(null)
 const dragOver = ref(false)
 
-const answerKeys = computed(() => DB.answerKeys())
+const answerKeys = ref([])
 const files = computed(() => store.uploadFiles)
 
 const selectedKeyId = computed({
@@ -35,10 +35,10 @@ const selectedKeyId = computed({
 })
 
 /* Fall back to the first key if the stored selection no longer exists. */
-onMounted(() => {
-  const keys = answerKeys.value
-  if (!keys.some((key) => key.id === store.selectedAnswerKeyId)) {
-    store.selectedAnswerKeyId = keys[0]?.id || null
+onMounted(async () => {
+  answerKeys.value = await API.answerKeys()
+  if (!answerKeys.value.some((key) => key.id === store.selectedAnswerKeyId)) {
+    store.selectedAnswerKeyId = answerKeys.value[0]?.id || null
   }
 })
 
@@ -151,7 +151,8 @@ async function proceed() {
     await showMessage('Answer Key Required', 'Select or create an answer key before processing.')
     return
   }
-  if (!DB.answerKeyItems(keyId).length) {
+  const items = await API.answerKeyItems(keyId)
+  if (!items.length) {
     await showMessage('Answer Key Is Empty', 'Add at least one valid item to the selected answer key.')
     return
   }
@@ -197,9 +198,9 @@ async function proceed() {
         </div>
 
         <div class="model-note mt-14">
-          <span class="badge badge-blue">Model Pending</span>
+          <span class="badge badge-blue">Automated Grading</span>
           <p>
-            Processing creates clearly labeled placeholder records until the OCR model is connected.
+            Each image is graded automatically when processing runs; low-confidence answers are flagged for review.
           </p>
         </div>
       </aside>

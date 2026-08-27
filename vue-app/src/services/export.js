@@ -13,26 +13,26 @@
    throwing.
    ============================================================ */
 
-import { DB } from '@/services/database.js'
+import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
 
-export function exportSessionToFile(sessionId) {
+export async function exportSessionToFile(sessionId) {
   const id = parseInt(sessionId) || null
   if (!id) {
     showMessage('No Session', 'No grading session to export.')
     return null
   }
 
-  const results = DB.studentResults(id)
+  const results = await API.studentResults(id)
   if (!results.length) {
     showMessage('No Data', 'No results in this session to export.')
     return null
   }
 
-  const prefs = DB.getExportPreferences()
-  const requestedFilename = formatExportFilename(id, prefs)
+  const prefs = await API.getExportPreferences()
+  const requestedFilename = await formatExportFilename(id, prefs)
   const summaryData = buildSummaryRows(results, prefs)
-  const detailData = prefs.include_item_scores ? buildDetailRows(results, prefs) : null
+  const detailData = prefs.include_item_scores ? await buildDetailRows(results, prefs) : null
   const forceCsv = /\.csv$/i.test(requestedFilename)
 
   if (!forceCsv && typeof XLSX !== 'undefined') {
@@ -74,7 +74,7 @@ function buildSummaryRows(results, prefs) {
   return rows
 }
 
-function buildDetailRows(results, prefs) {
+async function buildDetailRows(results, prefs) {
   const header = []
   if (prefs.include_student_info) header.push('Student', 'Section')
   header.push('Item #')
@@ -84,9 +84,11 @@ function buildDetailRows(results, prefs) {
   header.push('Status', 'Model')
   if (prefs.include_flagged_notes) header.push('Remarks')
 
+  const itemLists = await Promise.all(results.map((result) => API.resultItems(result.id)))
+
   const rows = [header]
-  for (const result of results) {
-    for (const item of DB.resultItems(result.id)) {
+  results.forEach((result, index) => {
+    for (const item of itemLists[index]) {
       const row = []
       if (prefs.include_student_info) row.push(result.student_name || '', result.section || '')
       row.push(item.item_no)
@@ -97,17 +99,21 @@ function buildDetailRows(results, prefs) {
       if (prefs.include_flagged_notes) row.push(item.remarks || '')
       rows.push(row)
     }
-  }
+  })
   return rows
 }
 
 /* Expands the {session} {date} {answer_key} {subject} {section} tokens
    the Settings page lets the teacher configure, then strips anything
    Windows rejects in a filename. */
-function formatExportFilename(sessionId, prefs) {
-  const session = DB.sessions().find((s) => s.id === sessionId) || {}
-  const answerKey = DB.answerKeys().find((k) => k.id === session.answer_key_id) || {}
-  const results = DB.studentResults(sessionId)
+async function formatExportFilename(sessionId, prefs) {
+  const [sessions, answerKeys, results] = await Promise.all([
+    API.sessions(),
+    API.answerKeys(),
+    API.studentResults(sessionId),
+  ])
+  const session = sessions.find((s) => s.id === sessionId) || {}
+  const answerKey = answerKeys.find((k) => k.id === session.answer_key_id) || {}
   const sections = [...new Set(results.map((r) => (r.section || '').trim()).filter(Boolean))]
 
   const tokens = {

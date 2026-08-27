@@ -4,23 +4,28 @@
    Ported from dashboard.js.
    ============================================================ */
 
-import { computed } from 'vue'
-import { DB } from '@/services/database.js'
+import { ref, computed, onMounted } from 'vue'
+import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 
 const store = useAppStore()
 
 const teacherName = computed(() => store.currentUser?.full_name || 'Teacher')
 
-const stats = computed(() => DB.dashboardStats())
+const stats = ref({ sheets: 0, sessions: 0, flagged: 0, average: 0 })
+const recentSessions = ref([])
 
 /* Each recent session is joined with its results to derive the
-   per-session average and flagged count. */
-const recentSessions = computed(() =>
-  DB.sessions()
-    .slice(0, 8)
-    .map((session) => {
-      const results = DB.studentResults(session.id)
+   per-session average and flagged count. Reads through the FastAPI
+   backend now (api.js), so this loads once on mount rather than being
+   a synchronous computed over localStorage. */
+async function load() {
+  stats.value = await API.dashboardStats()
+
+  const sessions = (await API.sessions()).slice(0, 8)
+  recentSessions.value = await Promise.all(
+    sessions.map(async (session) => {
+      const results = await API.studentResults(session.id)
       const average = results.length
         ? Math.round(
             (results.reduce((sum, r) => sum + (r.percentage || 0), 0) / results.length) * 100,
@@ -29,7 +34,10 @@ const recentSessions = computed(() =>
       const flagged = results.reduce((sum, r) => sum + (r.flagged_count || 0), 0)
       return { ...session, sheets: results.length, average, flagged }
     }),
-)
+  )
+}
+
+onMounted(load)
 
 function badgeClass(status) {
   if (status === 'Completed') return 'badge-success'
@@ -56,7 +64,7 @@ const QUICK_ACTIONS = [
       <div class="stat-card">
         <div class="stat-label">Total Sheets Graded</div>
         <div class="stat-value">{{ stats.sheets }}</div>
-        <div class="stat-delta">Stored in local storage</div>
+        <div class="stat-delta">Stored in MySQL</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Total Sessions</div>
