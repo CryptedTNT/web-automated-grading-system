@@ -8,6 +8,18 @@
    ============================================================ */
 
 import { ref, computed, onMounted } from 'vue'
+import {
+  BorderStyle,
+  Document,
+  Packer,
+  Paragraph,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+  convertInchesToTwip,
+} from 'docx'
 import { API } from '@/services/api.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
 
@@ -364,6 +376,30 @@ function escapeHtml(str) {
   }[c]))
 }
 
+/* Shared by Preview/Print and Download as Word: collects the current
+   draft's items (even if unsaved) and confirms proceeding if some are
+   incomplete. Returns null if there's nothing to export or the
+   teacher backs out, so both callers can bail the same way. */
+async function getExportableItems(actionLabel) {
+  const items = collectItems()
+  if (!items.length) {
+    await showMessage('No Items', `Add at least one question before ${actionLabel}.`)
+    return null
+  }
+  const missing = items.filter((i) =>
+    !i.question_text.trim() ||
+    (i.type === 'Multiple Choice' && Object.values(i.choices).some((c) => !c.trim())),
+  )
+  if (missing.length) {
+    const proceed = await showConfirm(
+      'Incomplete Questionnaire',
+      `${missing.length} question(s) are missing question text or choices and will be left blank. Continue anyway?`,
+    )
+    if (!proceed) return null
+  }
+  return items
+}
+
 async function previewQuestionnaire() {
   // window.open() must happen synchronously, before any await — otherwise
   // the browser no longer ties it to this click and silently blocks it.
@@ -373,31 +409,33 @@ async function previewQuestionnaire() {
     return
   }
 
-  const items = collectItems()
-  if (!items.length) {
+  const items = await getExportableItems('previewing')
+  if (!items) {
     preview.close()
-    showMessage('No Items', 'Add at least one question before previewing.')
     return
-  }
-
-  const missing = items.filter((i) =>
-    !i.question_text.trim() ||
-    (i.type === 'Multiple Choice' && Object.values(i.choices).some((c) => !c.trim())),
-  )
-  if (missing.length) {
-    const proceed = await showConfirm(
-      'Incomplete Questionnaire',
-      `${missing.length} question(s) are missing question text or choices and will print with blank spaces. Continue anyway?`,
-    )
-    if (!proceed) {
-      preview.close()
-      return
-    }
   }
 
   preview.document.open()
   preview.document.write(questionnaireHtml(items))
   preview.document.close()
+}
+
+async function downloadQuestionnaireWord() {
+  const items = await getExportableItems('downloading')
+  if (!items) return
+
+  const doc = buildQuestionnaireDocx(items)
+  const blob = await Packer.toBlob(doc)
+  const filename = `${(keyName.value.trim() || 'Untitled Answer Key').replace(/[<>:"/\\|?*]+/g, '_')}.docx`
+
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 /* Instruction line printed under each section heading. The underline
@@ -447,15 +485,19 @@ function questionnaireHtml(items) {
       let groupNo = 0
       for (const groupItems of groups.values()) {
         groupNo += 1
-        sectionsHtml += `<div class="q-prompt">${groupNo}. ${escapeHtml(groupItems[0].question_text)}</div><div class="enum-blanks">`
+        // Wrapped in one block so a page break never lands between the
+        // prompt and its blanks, or between two of that group's blanks.
+        sectionsHtml += `<div class="block"><div class="q-prompt">${groupNo}. ${escapeHtml(groupItems[0].question_text)}</div><div class="enum-blanks">`
         groupItems.forEach(() => {
           sectionsHtml += `<div class="blank-line">- <span class="blank"></span></div>`
         })
-        sectionsHtml += `</div>`
+        sectionsHtml += `</div></div>`
       }
     } else {
       section.items.forEach((item, idx) => {
-        sectionsHtml += `<div class="q-line"><span class="blank"></span>${idx + 1}. ${escapeHtml(item.question_text)}</div>`
+        // Wrapped in one block so a page break never separates a question
+        // from its own choices.
+        sectionsHtml += `<div class="block"><div class="q-line"><span class="blank"></span>${idx + 1}. ${escapeHtml(item.question_text)}</div>`
         if (section.name === 'Multiple Choice') {
           sectionsHtml += `<div class="choices">`
             + `<span>a. ${escapeHtml(item.choices.a)}</span>`
@@ -464,6 +506,7 @@ function questionnaireHtml(items) {
             + `<span>d. ${escapeHtml(item.choices.d)}</span>`
             + `</div>`
         }
+        sectionsHtml += `</div>`
       })
     }
 
@@ -490,8 +533,18 @@ function questionnaireHtml(items) {
     .field-row { display: flex; align-items: flex-end; gap: 8px; white-space: nowrap; font-size: 13px; color: #4b5563; }
     .line { flex: 1; min-height: 1px; margin-bottom: 2px; border-bottom: 1px solid #111827; }
     .section { margin-top: 22px; }
-    .section-title { font-weight: 700; font-size: 14px; margin-bottom: 3px; color: #000; }
-    .section-instruction { font-size: 12.5px; color: #374151; margin-bottom: 10px; }
+    .section-title {
+      font-weight: 700; font-size: 14px; margin-bottom: 3px; color: #000;
+      break-after: avoid; page-break-after: avoid;
+    }
+    .section-instruction {
+      font-size: 12.5px; color: #374151; margin-bottom: 10px;
+      break-after: avoid; page-break-after: avoid;
+    }
+    /* Keeps a question and its own choices/blanks together -- without
+       this a page break can land between a question and its answer
+       lines, splitting one item across two sheets. */
+    .block { break-inside: avoid; page-break-inside: avoid; }
     .q-line, .q-prompt { margin: 10px 0 4px; }
     .blank { display: inline-block; min-width: 60px; border-bottom: 1px solid #111827; margin-right: 6px; }
     .choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; margin: 2px 0 10px 66px; color: #4b5563; font-size: 13px; }
@@ -499,8 +552,14 @@ function questionnaireHtml(items) {
     .blank-line { margin: 6px 0; }
     .print { margin: 0 0 18px; padding: 9px 16px; border: 0; border-radius: 6px; background: #1f6fb2; color: white; cursor: pointer; font-weight: 600; }
     .print:hover { background: #185c96; }
+    /* The actual paper margin used when printing/saving as PDF -- distinct
+       from the body's padding above, which only affects the on-screen
+       preview's content box. Auto-pagination for overflowing content is
+       the browser's native print behavior; this just makes it 1" on
+       every sheet instead of whatever the browser/printer defaults to. */
+    @page { margin: 1in; }
     @media print {
-      body { margin: 0; max-width: none; }
+      body { margin: 0; max-width: none; padding: 0; }
       .print { display: none; }
     }
   </style>
@@ -516,6 +575,190 @@ function questionnaireHtml(items) {
   ${sectionsHtml}
 </body>
 </html>`
+}
+
+/* Splits "Write <strong>TRUE</strong> ... <strong>FALSE</strong> ..." into
+   plain and bold runs without pulling in an HTML parser -- the only markup
+   SECTION_META instructions ever contain is <strong>. */
+function instructionRuns(html) {
+  return html
+    .split(/(<strong>.*?<\/strong>)/g)
+    .filter(Boolean)
+    .map((part) => {
+      const match = part.match(/^<strong>(.*)<\/strong>$/)
+      return new TextRun({ text: match ? match[1] : part, bold: Boolean(match), size: 20, color: '444444' })
+    })
+}
+
+/* Word counterpart to questionnaireHtml() — same content and section
+   order, built with the `docx` library instead of an HTML string, for
+   teachers who want an editable/portable file rather than a print-only
+   page. Blanks are a run of underscores (docx has no CSS border-bottom
+   equivalent); margins are the standard 1" on every side. */
+/* 1.5 line spacing on every paragraph, matching questionnaireHtml()'s
+   `body { line-height: 1.5 }` -- without this, Word's default single
+   spacing makes the same before/after margins look far more cramped
+   than the browser preview even with identical twip values. */
+const LINE_SPACING = { line: 360, lineRule: 'auto' }
+
+function noBorder() {
+  return { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' }
+}
+
+function buildQuestionnaireDocx(items) {
+  const blank = (length) => '_'.repeat(length)
+
+  const sections = [
+    { label: 'I', name: 'Multiple Choice', items: items.filter((i) => i.type === 'Multiple Choice') },
+    { label: 'II', name: 'True or False', items: items.filter((i) => i.type === 'True or False') },
+    { label: 'III', name: 'Identification', items: items.filter((i) => i.type === 'Identification') },
+    { label: 'IV', name: 'Enumeration', items: items.filter((i) => i.type === 'Enumeration') },
+  ].filter((section) => section.items.length)
+
+  const children = [
+    new Paragraph({
+      spacing: { ...LINE_SPACING, after: 160 },
+      children: [
+        new TextRun({ text: 'Name: ' }),
+        new TextRun({ text: blank(28) }),
+        new TextRun({ text: '    Date: ' }),
+        new TextRun({ text: blank(18) }),
+      ],
+    }),
+    new Paragraph({
+      spacing: { ...LINE_SPACING, after: 360 },
+      children: [
+        new TextRun({ text: 'Section: ' }),
+        new TextRun({ text: blank(25) }),
+        new TextRun({ text: '    Score: ' }),
+        new TextRun({ text: blank(18) }),
+      ],
+    }),
+  ]
+
+  // Even 4-column spread for MC choices, matching questionnaireHtml()'s
+  // `.choices { grid-template-columns: repeat(4, 1fr) }` -- padded text
+  // alone can't do this reliably in a proportional font like Word's
+  // default, so each choice gets its own equal-width, borderless cell.
+  function choicesRow(choices) {
+    const cell = (text) =>
+      new TableCell({
+        width: { size: 25, type: WidthType.PERCENTAGE },
+        borders: { top: noBorder(), bottom: noBorder(), left: noBorder(), right: noBorder() },
+        children: [
+          new Paragraph({
+            spacing: LINE_SPACING,
+            children: [new TextRun({ text, size: 20, color: '444444' })],
+          }),
+        ],
+      })
+    return new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      indent: { size: convertInchesToTwip(0.7), type: WidthType.DXA },
+      rows: [
+        new TableRow({
+          children: [
+            cell(`a. ${choices.a}`),
+            cell(`b. ${choices.b}`),
+            cell(`c. ${choices.c}`),
+            cell(`d. ${choices.d}`),
+          ],
+        }),
+      ],
+    })
+  }
+
+  sections.forEach((section) => {
+    const meta = SECTION_META[section.name]
+    children.push(
+      new Paragraph({
+        keepNext: true,
+        spacing: { ...LINE_SPACING, before: 320, after: 80 },
+        children: [new TextRun({ text: `${section.label}. ${section.name}`, bold: true, size: 26 })],
+      }),
+      // keepNext glues this to the first question that follows, so the
+      // heading+instruction pair is never left alone at a page bottom.
+      new Paragraph({
+        keepNext: true,
+        spacing: { ...LINE_SPACING, after: 240 },
+        children: instructionRuns(meta.instruction),
+      }),
+    )
+
+    if (section.name === 'Enumeration') {
+      // Numbering restarts per section for display only, same as the print version.
+      const groups = new Map()
+      section.items.forEach((item) => {
+        if (!groups.has(item.enum_group)) groups.set(item.enum_group, [])
+        groups.get(item.enum_group).push(item)
+      })
+      let groupNo = 0
+      for (const groupItems of groups.values()) {
+        groupNo += 1
+        children.push(
+          new Paragraph({
+            keepNext: true,
+            spacing: { ...LINE_SPACING, before: 200, after: 80 },
+            children: [new TextRun({ text: `${groupNo}. ${groupItems[0].question_text}` })],
+          }),
+        )
+        groupItems.forEach((blankItem, blankIdx) => {
+          children.push(
+            new Paragraph({
+              // Glue every blank but the last to the one after it, so the
+              // whole group of answer lines resists being split apart --
+              // the last blank stays free to break normally.
+              keepNext: blankIdx < groupItems.length - 1,
+              keepLines: true,
+              indent: { left: convertInchesToTwip(0.3) },
+              spacing: { ...LINE_SPACING, after: 160 },
+              children: [new TextRun({ text: `-  ${blank(20)}` })],
+            }),
+          )
+        })
+      }
+    } else {
+      section.items.forEach((item, idx) => {
+        children.push(
+          new Paragraph({
+            // keepNext glues this question to its own choices table (for MC)
+            // so a page break can't separate a question from its answers.
+            keepNext: section.name === 'Multiple Choice',
+            keepLines: true,
+            spacing: { ...LINE_SPACING, before: 200, after: 40 },
+            children: [
+              new TextRun({ text: `${blank(14)}  ` }),
+              new TextRun({ text: `${idx + 1}. ${item.question_text}` }),
+            ],
+          }),
+        )
+        if (section.name === 'Multiple Choice') {
+          children.push(choicesRow(item.choices))
+          // A table can't carry its own bottom spacing the way a
+          // paragraph does, so an empty spacer paragraph follows it.
+          children.push(new Paragraph({ spacing: { after: 160 }, children: [] }))
+        }
+      })
+    }
+  })
+
+  return new Document({
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: {
+              top: convertInchesToTwip(1),
+              bottom: convertInchesToTwip(1),
+              left: convertInchesToTwip(1),
+              right: convertInchesToTwip(1),
+            },
+          },
+        },
+        children,
+      },
+    ],
+  })
 }
 
 onMounted(reload)
@@ -730,6 +973,9 @@ onMounted(reload)
         <div class="flex gap-8 mt-8 items-center">
           <button class="btn btn-secondary" title="Preview and print this questionnaire." @click="previewQuestionnaire">
             Preview / Print Questionnaire
+          </button>
+          <button class="btn btn-secondary" title="Download this questionnaire as a Word document." @click="downloadQuestionnaireWord">
+            Download as Word
           </button>
           <div class="spacer"></div>
           <button class="btn btn-primary" title="Save the exam questionnaire." @click="saveKey">Save Questionnaire</button>
