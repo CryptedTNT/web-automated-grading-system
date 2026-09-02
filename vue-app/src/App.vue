@@ -10,15 +10,16 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app.js'
-import { API } from '@/services/api.js'
 import DialogHost from '@/components/DialogHost.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useAppStore()
 
-/* Auth routes are marked `public` in the router and render bare. */
-const isAuthScreen = computed(() => route.meta.public === true)
+/* Auth routes are marked `public` in the router and render bare. Verify
+   Email is authenticated (not `public`) but still wants the bare,
+   sidebar-less look, so it's marked `bare` instead. */
+const isAuthScreen = computed(() => route.meta.public === true || route.meta.bare === true)
 
 const NAV_ITEMS = [
   { name: 'dashboard', icon: '▦', label: 'Dashboard', title: 'View overall grading statistics and recent system activity.' },
@@ -82,11 +83,7 @@ watch(
 /* ---------- Logout ---------- */
 async function logout() {
   await store.signOut()
-  router.push(
-    (await API.hasUser())
-      ? { name: 'login', query: { status: 'loggedout' } }
-      : { name: 'setup' },
-  )
+  router.push({ name: 'login', query: { status: 'loggedout' } })
 }
 </script>
 

@@ -1,5 +1,7 @@
 """Auth endpoints. See database/INTEGRATION_CONTRACT.md section 4
-"Authentication" for the SQL each of these implements.
+"Authentication" for the SQL most of these implement; email
+verification and password reset (added in V005) aren't in that
+original contract but follow the same shape.
 
 Never SELECT * from faculty in a response -- it carries password and
 security-answer hashes. Every response below names its columns.
@@ -7,22 +9,35 @@ security-answer hashes. Every response below names its columns.
 
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Faculty
+from app.email_sender import send_code_email
+from app.models import EmailVerificationCode, Faculty
 from app.schemas import (
+    ForgotResetRequest,
+    ForgotSendCodeRequest,
     LoginRequest,
     RegisterRequest,
-    ResetPasswordRequest,
+    UpdateEmailRequest,
     UpdatePasswordRequest,
     UpdateProfileRequest,
+    VerifyEmailCodeRequest,
 )
-from app.security import get_current_faculty, hash_password, verify_and_maybe_migrate
+from app.security import (
+    generate_numeric_code,
+    get_current_faculty,
+    hash_password,
+    verify_and_maybe_migrate,
+)
+from werkzeug.security import check_password_hash
 
 router = APIRouter(tags=["auth"])
+
+CODE_LIFETIME = datetime.timedelta(minutes=10)
+RESEND_COOLDOWN = datetime.timedelta(minutes=5)
 
 
 def _public_shape(f: Faculty) -> dict:
@@ -31,9 +46,94 @@ def _public_shape(f: Faculty) -> dict:
         "full_name": f.full_name,
         "institution": f.institution,
         "username": f.username,
+        "email": f.email,
+        "email_verified": bool(f.email_verified),
         "created_at": f.created_at,
         "last_login": f.last_login_at,
     }
+
+
+def _issue_code(faculty: Faculty, purpose: str, db: Session) -> str:
+    """Generates, hashes, and stores a code for this faculty/purpose,
+    then returns the raw code so the caller can email it. The raw code
+    is never persisted -- only its hash, same principle as passwords."""
+    code = generate_numeric_code()
+    db.add(
+        EmailVerificationCode(
+            faculty_id=faculty.faculty_id,
+            purpose=purpose,
+            code_hash=hash_password(code),
+            expires_at=datetime.datetime.utcnow() + CODE_LIFETIME,
+            created_at=datetime.datetime.utcnow(),
+        )
+    )
+    db.commit()
+    return code
+
+
+def _seconds_until_resend(faculty: Faculty, purpose: str, db: Session) -> int:
+    """Seconds remaining before another code may be issued for this
+    faculty/purpose, based on when the most recent one (used or not)
+    was issued -- 0 once RESEND_COOLDOWN has elapsed, or if none exists
+    yet. This caps how often Gmail sends go out per account, not just
+    how often a code can be *checked*."""
+    last = db.scalar(
+        select(EmailVerificationCode)
+        .where(
+            EmailVerificationCode.faculty_id == faculty.faculty_id,
+            EmailVerificationCode.purpose == purpose,
+        )
+        .order_by(EmailVerificationCode.created_at.desc())
+        .limit(1)
+    )
+    if not last:
+        return 0
+    remaining = RESEND_COOLDOWN - (datetime.datetime.utcnow() - last.created_at)
+    return max(0, int(remaining.total_seconds()))
+
+
+def _format_wait(seconds: int) -> str:
+    minutes, secs = divmod(seconds, 60)
+    if minutes and secs:
+        return f"{minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m"
+    return f"{secs}s"
+
+
+def _require_not_cooling_down(faculty: Faculty, purpose: str, db: Session) -> None:
+    """Raises 429 with a Retry-After header if a code was issued too
+    recently. The frontend reads Retry-After to drive its own countdown
+    rather than treating this as a real failure."""
+    wait = _seconds_until_resend(faculty, purpose, db)
+    if wait > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Please wait before requesting another code. Try again in {_format_wait(wait)}.",
+            headers={"Retry-After": str(wait)},
+        )
+
+
+def _check_code(faculty: Faculty, purpose: str, submitted_code: str, db: Session) -> bool:
+    """True if `submitted_code` matches any unused, unexpired code
+    issued for this faculty/purpose. Marks that row used on success so
+    it can't be replayed."""
+    now = datetime.datetime.utcnow()
+    candidates = db.scalars(
+        select(EmailVerificationCode).where(
+            EmailVerificationCode.faculty_id == faculty.faculty_id,
+            EmailVerificationCode.purpose == purpose,
+            EmailVerificationCode.used_at.is_(None),
+            EmailVerificationCode.expires_at > now,
+        )
+    )
+    for row in candidates:
+        if check_password_hash(row.code_hash, submitted_code):
+            row.used_at = now
+            db.add(row)
+            db.commit()
+            return True
+    return False
 
 
 @router.get("/setup-state")
@@ -43,7 +143,7 @@ def setup_state(db: Session = Depends(get_db)):
 
 
 @router.post("/auth/register", status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     existing = db.scalar(select(Faculty).where(Faculty.username == body.username))
     if existing:
         raise HTTPException(status_code=409, detail="That username is already taken.")
@@ -53,18 +153,22 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         full_name=body.full_name,
         institution=body.institution,
         username=body.username,
+        email=body.email,
+        email_verified=0,
         password_hash=hash_password(body.password),
         password_salt=None,
-        security_question=body.security_question,
-        security_answer_hash=hash_password(body.security_answer.strip().lower()),
-        security_answer_salt=None,
         created_at=now,
         updated_at=now,
     )
     db.add(faculty)
     db.commit()
     db.refresh(faculty)
-    return {"id": faculty.faculty_id}
+
+    # Auto-sign-in so the Verify Email step right after signup can reuse
+    # the same authenticated /account/email/* endpoints Settings uses
+    # later, instead of a separate public-by-username code path.
+    request.session["faculty_id"] = faculty.faculty_id
+    return _public_shape(faculty)
 
 
 @router.post("/auth/login")
@@ -92,56 +196,6 @@ def me(faculty: Faculty = Depends(get_current_faculty)):
     return _public_shape(faculty)
 
 
-@router.get("/auth/security-question")
-def security_question(username: str, db: Session = Depends(get_db)):
-    faculty = db.scalar(select(Faculty).where(Faculty.username == username))
-    if not faculty:
-        raise HTTPException(status_code=404, detail="No account with that username.")
-    return {"security_question": faculty.security_question}
-
-
-@router.post("/auth/reset")
-def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
-    faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
-    if not faculty:
-        return {"ok": False}
-
-    answer_matches = (
-        verify_and_maybe_migrate_answer(faculty, body.security_answer, db)
-        if faculty.security_answer_salt
-        else _check_answer_hash(faculty, body.security_answer)
-    )
-    if not answer_matches:
-        return {"ok": False}
-
-    faculty.password_hash = hash_password(body.new_password)
-    faculty.password_salt = None
-    db.add(faculty)
-    db.commit()
-    return {"ok": True}
-
-
-def _check_answer_hash(faculty: Faculty, answer: str) -> bool:
-    from werkzeug.security import check_password_hash
-
-    return check_password_hash(faculty.security_answer_hash, answer.strip().lower())
-
-
-def verify_and_maybe_migrate_answer(faculty: Faculty, answer: str, db: Session) -> bool:
-    import hashlib
-
-    legacy = hashlib.sha256(
-        f"{answer.strip().lower()}:{faculty.security_answer_salt}".encode("utf-8")
-    ).hexdigest()
-    if legacy != faculty.security_answer_hash:
-        return False
-    faculty.security_answer_hash = hash_password(answer.strip().lower())
-    faculty.security_answer_salt = None
-    db.add(faculty)
-    db.commit()
-    return True
-
-
 @router.patch("/account/profile")
 def update_profile(
     body: UpdateProfileRequest,
@@ -163,6 +217,106 @@ def update_password(
 ):
     if not verify_and_maybe_migrate(faculty, body.current_password, db):
         return {"ok": False}
+    faculty.password_hash = hash_password(body.new_password)
+    faculty.password_salt = None
+    db.add(faculty)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------
+# Email verification -- used both right after signup and later from
+# Settings. Same two endpoints either way.
+# ---------------------------------------------------------------------
+
+
+@router.post("/account/email")
+def update_email(
+    body: UpdateEmailRequest,
+    faculty: Faculty = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    faculty.email = body.email
+    faculty.email_verified = 0  # a changed email is unverified until proven again
+    db.add(faculty)
+    db.commit()
+    return _public_shape(faculty)
+
+
+@router.post("/account/email/send-code")
+def send_email_verification_code(
+    faculty: Faculty = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    if not faculty.email:
+        raise HTTPException(status_code=400, detail="Add an email address first.")
+    _require_not_cooling_down(faculty, "verify_email", db)
+    code = _issue_code(faculty, "verify_email", db)
+    try:
+        send_code_email(faculty.email, code, "verify_email")
+    except Exception:
+        # SMTP misconfiguration or a transient failure on Google's end --
+        # either way the teacher should see a clean message, not a 500.
+        raise HTTPException(status_code=502, detail="Could not send the verification email right now. Please try again shortly.")
+    return {"ok": True}
+
+
+@router.post("/account/email/verify")
+def verify_email_code(
+    body: VerifyEmailCodeRequest,
+    faculty: Faculty = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    if not _check_code(faculty, "verify_email", body.code, db):
+        return {"ok": False}
+    faculty.email_verified = 1
+    db.add(faculty)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------
+# Forgot password -- public (no session yet). Requires a *verified*
+# email, per the app's own rule: an unverified address was never proven
+# to belong to the account holder, so it can't be trusted to recover it.
+# ---------------------------------------------------------------------
+
+
+@router.post("/auth/forgot/send-code")
+def forgot_send_code(body: ForgotSendCodeRequest, db: Session = Depends(get_db)):
+    faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
+    if not faculty:
+        # Same generic response as "sent" -- don't confirm a nonexistent
+        # username. (An existing-but-unverified account DOES get a
+        # specific message below; seeAppMapping/plan for why that
+        # tradeoff was made deliberately, not by oversight.)
+        return {"ok": True}
+
+    if not faculty.email or not faculty.email_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="This account's email hasn't been verified, so it can't be used to reset the "
+            "password yet. Sign in and verify it from Settings first.",
+        )
+
+    _require_not_cooling_down(faculty, "reset_password", db)
+    code = _issue_code(faculty, "reset_password", db)
+    try:
+        send_code_email(faculty.email, code, "reset_password")
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not send the reset email right now. Please try again shortly.")
+    return {"ok": True}
+
+
+@router.post("/auth/forgot/reset")
+def forgot_reset(body: ForgotResetRequest, db: Session = Depends(get_db)):
+    faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
+    if not faculty:
+        return {"ok": False}
+
+    if not _check_code(faculty, "reset_password", body.code, db):
+        return {"ok": False}
+
     faculty.password_hash = hash_password(body.new_password)
     faculty.password_salt = None
     db.add(faculty)

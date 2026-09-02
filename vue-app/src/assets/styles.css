@@ -333,7 +333,7 @@ a:hover { text-decoration: underline; }
 
 /* ---------- Form Controls ---------- */
 input[type="text"], input[type="password"], input[type="number"],
-input[type="file"], select, textarea {
+input[type="email"], input[type="file"], select, textarea {
   width: 100%;
   background: var(--card-bg);
   border: 1px solid var(--input-border);

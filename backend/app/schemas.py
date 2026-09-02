@@ -16,8 +16,7 @@ class RegisterRequest(BaseModel):
     institution: str | None = None
     username: str
     password: str
-    security_question: str
-    security_answer: str
+    email: str
 
 
 class LoginRequest(BaseModel):
@@ -25,9 +24,21 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class ResetPasswordRequest(BaseModel):
+class VerifyEmailCodeRequest(BaseModel):
+    code: str
+
+
+class UpdateEmailRequest(BaseModel):
+    email: str
+
+
+class ForgotSendCodeRequest(BaseModel):
     username: str
-    security_answer: str
+
+
+class ForgotResetRequest(BaseModel):
+    username: str
+    code: str
     new_password: str
 
 

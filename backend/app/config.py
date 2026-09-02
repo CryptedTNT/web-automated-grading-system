@@ -22,6 +22,15 @@ class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "dev-only-insecure-key-change-me")
     frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 
+    # Gmail SMTP -- see SETUP.md for how to generate the app password.
+    # This account is what the server sends verification/reset emails
+    # *from*; it is separate from any teacher's own email in `faculty`.
+    smtp_host: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user: str = os.getenv("SMTP_USER", "")
+    smtp_app_password: str = os.getenv("SMTP_APP_PASSWORD", "")
+    smtp_from_email: str = os.getenv("FROM_EMAIL", "") or smtp_user
+
 
 settings = Settings()
 settings.upload_dir.mkdir(parents=True, exist_ok=True)

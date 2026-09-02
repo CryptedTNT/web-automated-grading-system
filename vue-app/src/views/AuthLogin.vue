@@ -52,10 +52,10 @@ async function submit() {
 
   const user = await API.verifyUser(username.value.trim(), password.value)
   if (!user) {
-    /* Which of the two was wrong is deliberately not revealed to the
-       user, but the username is only flagged when no such account
-       exists — otherwise the password is the one to re-check. */
-    invalidUsername.value = !(await API.getUserByUsername(username.value.trim()))
+    /* The backend doesn't say which of the two was wrong (and no
+       longer exposes a public by-username lookup to infer it from),
+       so both fields are flagged together. */
+    invalidUsername.value = true
     invalidPassword.value = true
     failureMessage.value = 'Invalid username or password.'
     await showMessage('Login Failed', 'Invalid username or password.')
@@ -143,6 +143,11 @@ function clearInvalid(field) {
       >
         Login
       </button>
+
+      <div class="muted-text text-center mt-8">
+        Don't have an account?
+        <RouterLink :to="{ name: 'setup' }">Sign Up</RouterLink>
+      </div>
 
       <div class="spacer"></div>
       <div class="muted-text text-center">© 2027 AGS. Web-based application.</div>
