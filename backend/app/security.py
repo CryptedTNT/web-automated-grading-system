@@ -17,6 +17,7 @@ New accounts always go straight to werkzeug, salt NULL.
 """
 
 import hashlib
+import secrets
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -24,6 +25,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.db import get_db
 from app.models import Faculty
+
+
+def generate_numeric_code() -> str:
+    """A 6-digit code for email verification/password reset. Zero-padded
+    so it's always 6 characters (e.g. '004821'), generated with `secrets`
+    (not `random`) since it's a short-lived credential, same reasoning
+    as password hashing."""
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def _legacy_hash(password: str, salt: str) -> str:

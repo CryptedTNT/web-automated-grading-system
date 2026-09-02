@@ -33,7 +33,14 @@ async function request(method, path, body) {
   }
   if (!res.ok) {
     const message = (data && data.detail) || `Request failed: ${method} ${path} (${res.status})`
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    const error = new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    // 429s from the resend-code cooldown carry a standard Retry-After
+    // header (see backend/app/routers/auth.py's _require_not_cooling_down)
+    // so callers can drive a countdown instead of treating this as a
+    // real failure.
+    const retryAfter = res.status === 429 ? Number(res.headers.get('Retry-After')) : null
+    if (retryAfter) error.retryAfterSeconds = retryAfter
+    throw error
   }
   return data
 }
@@ -75,18 +82,19 @@ export const API = {
     const { has_user } = await get('/setup-state')
     return has_user
   },
-  async createUser(fullName, institution, username, password, securityQuestion, securityAnswer) {
+  async createUser(fullName, institution, username, password, email) {
     const pwError = passwordError(password)
     if (pwError) throw new Error(pwError)
-    const { id } = await post('/auth/register', {
+    // Returns the full signed-in user (same shape as verifyUser()) --
+    // registering also establishes the session server-side, so the
+    // caller can go straight into signIn() without a separate login.
+    return post('/auth/register', {
       full_name: fullName,
       institution,
       username,
       password,
-      security_question: securityQuestion,
-      security_answer: securityAnswer,
+      email,
     })
-    return id
   },
   async verifyUser(username, password) {
     try {
@@ -105,14 +113,6 @@ export const API = {
   async logout() {
     await post('/auth/logout')
   },
-  async getUserByUsername(username) {
-    try {
-      const { security_question } = await get(`/auth/security-question?username=${encodeURIComponent(username)}`)
-      return { username, security_question }
-    } catch {
-      return null
-    }
-  },
   async getUserPublicById() {
     // With cookie-session auth the backend derives identity from the
     // session, not a client-held id — use getCurrentUser() instead.
@@ -130,14 +130,31 @@ export const API = {
     })
     return ok
   },
-  async resetPasswordWithSecurityAnswer(username, securityAnswer, newPassword) {
+
+  /* ---------- Email verification ---------- */
+  async updateEmail(email) {
+    return post('/account/email', { email })
+  },
+  async sendVerificationCode() {
+    const { ok } = await post('/account/email/send-code')
+    return ok
+  },
+  async verifyEmailCode(code) {
+    const { ok } = await post('/account/email/verify', { code })
+    return ok
+  },
+
+  /* ---------- Forgot password (email-code based) ---------- */
+  async forgotSendCode(username) {
+    // Throws with the backend's specific message (e.g. "email not
+    // verified") on failure -- the caller shows it via showMessage.
+    const { ok } = await post('/auth/forgot/send-code', { username })
+    return ok
+  },
+  async forgotReset(username, code, newPassword) {
     const pwError = passwordError(newPassword)
     if (pwError) throw new Error(pwError)
-    const { ok } = await post('/auth/reset', {
-      username,
-      security_answer: securityAnswer,
-      new_password: newPassword,
-    })
+    const { ok } = await post('/auth/forgot/reset', { username, code, new_password: newPassword })
     return ok
   },
 

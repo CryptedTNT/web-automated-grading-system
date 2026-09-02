@@ -1,5 +1,5 @@
 """SQLAlchemy ORM models, one class per table in database/migrations/
-V001-V004, plus read-only classes for the views in R__views.sql.
+V001-V005, plus read-only classes for the views in R__views.sql.
 
 Column names/types mirror the migrations exactly -- this file has no
 independent opinion about the schema, it just describes it to
@@ -26,6 +26,8 @@ class Faculty(Base):
     full_name: Mapped[str] = mapped_column(String(150))
     institution: Mapped[str | None] = mapped_column(String(150))
     username: Mapped[str] = mapped_column(String(60), unique=True)
+    email: Mapped[str | None] = mapped_column(String(255))
+    email_verified: Mapped[int] = mapped_column(SmallInteger, default=0)
     password_hash: Mapped[str] = mapped_column(String(255))
     password_salt: Mapped[str | None] = mapped_column(String(64))
     security_question: Mapped[str | None] = mapped_column(String(255))
@@ -35,6 +37,18 @@ class Faculty(Base):
     last_login_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime)
+
+
+class EmailVerificationCode(Base):
+    __tablename__ = "email_verification_code"
+
+    code_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    faculty_id: Mapped[int]
+    purpose: Mapped[str] = mapped_column(String(20))  # verify_email|reset_password
+    code_hash: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime)
 
 
 class AnswerKey(Base):

@@ -23,6 +23,7 @@ import { DB } from '@/services/database.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import { PALETTES, DEFAULT_THEME, applyTheme } from '@/services/theme.js'
+import { useResendCooldown } from '@/composables/useResendCooldown.js'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
 
@@ -46,6 +47,86 @@ const account = ref({
 })
 const passwords = ref({ current: '', next: '', confirm: '' })
 const invalid = ref(new Set())
+
+/* ------------------------------------------------------------ Email */
+
+const emailForm = ref({ email: store.currentUser?.email || '' })
+const isEmailVerified = computed(() => Boolean(store.currentUser?.email_verified))
+const verifiedLabel = computed(() => (isEmailVerified.value ? 'Verified' : 'Not Verified'))
+const verifiedBadgeClass = computed(() => (isEmailVerified.value ? 'badge-success' : 'badge-warning'))
+
+const codeSent = ref(false)
+const sendingCode = ref(false)
+const verifyingCode = ref(false)
+const verifyCodeInput = ref('')
+
+// Mirrors the backend's 5-minute resend cooldown (see auth.py's
+// RESEND_COOLDOWN) so the button visibly can't be spammed.
+const RESEND_COOLDOWN_SECONDS = 300
+const emailCooldown = useResendCooldown()
+
+async function saveEmail() {
+  const email = emailForm.value.email.trim()
+  if (!email) {
+    await showMessage('Email Required', 'Enter an email address before saving.')
+    return
+  }
+  try {
+    store.currentUser = await API.updateEmail(email)
+    codeSent.value = false
+    verifyCodeInput.value = ''
+    await showMessage('Email Saved', 'Email address saved. Verify it below to use it for password resets.')
+  } catch (error) {
+    await showMessage('Save Failed', error.message || 'Email could not be saved.')
+  }
+}
+
+async function sendVerifyCode() {
+  if (emailCooldown.active.value) return
+  sendingCode.value = true
+  try {
+    await API.sendVerificationCode()
+    codeSent.value = true
+    emailCooldown.start(RESEND_COOLDOWN_SECONDS)
+    await showMessage('Code Sent', `A 6-digit code was sent to ${store.currentUser?.email}.`)
+  } catch (error) {
+    if (error.retryAfterSeconds) {
+      // A code went out recently -- not a real failure, just reflect
+      // the existing cooldown and let the teacher enter that one.
+      emailCooldown.start(error.retryAfterSeconds)
+      codeSent.value = true
+    } else {
+      await showMessage('Send Failed', error.message || 'Could not send a verification code.')
+    }
+  } finally {
+    sendingCode.value = false
+  }
+}
+
+async function submitVerifyCode() {
+  if (!verifyCodeInput.value.trim()) {
+    await showMessage('Code Required', 'Enter the 6-digit code sent to your email.')
+    return
+  }
+  verifyingCode.value = true
+  let ok = false
+  try {
+    ok = await API.verifyEmailCode(verifyCodeInput.value.trim())
+  } catch (error) {
+    verifyingCode.value = false
+    await showMessage('Verification Failed', error.message || 'Could not verify the code.')
+    return
+  }
+  verifyingCode.value = false
+  if (!ok) {
+    await showMessage('Incorrect Code', 'That code is incorrect or has expired. Try resending a new one.')
+    return
+  }
+  if (store.currentUser) store.currentUser.email_verified = true
+  codeSent.value = false
+  verifyCodeInput.value = ''
+  await showMessage('Email Verified', 'Your email address has been verified.')
+}
 
 const username = computed(() => store.currentUser?.username || '')
 
@@ -284,6 +365,49 @@ function selectTheme(key) {
         <div class="form-group settings-span-2">
           <label class="form-label" for="set-user">Username</label>
           <input id="set-user" type="text" :value="username" readonly>
+        </div>
+
+        <div class="form-group settings-span-2">
+          <label class="form-label" for="set-email">
+            Email Address
+            <span class="badge" :class="verifiedBadgeClass">{{ verifiedLabel }}</span>
+          </label>
+          <input
+            id="set-email"
+            v-model="emailForm.email"
+            type="email"
+            placeholder="you@example.com"
+            title="Used to verify your account and reset your password if you forget it."
+          >
+          <div class="settings-actions mt-8">
+            <button class="btn btn-secondary btn-small" @click="saveEmail">Save Email</button>
+            <button
+              v-if="!isEmailVerified"
+              class="btn btn-secondary btn-small"
+              :disabled="sendingCode || emailCooldown.active.value"
+              @click="sendVerifyCode"
+            >
+              {{ emailCooldown.active.value
+                ? `Resend Code (${emailCooldown.formatted.value})`
+                : (codeSent ? 'Resend Code' : 'Send Verification Code') }}
+            </button>
+          </div>
+          <div v-if="codeSent" class="form-group mt-8">
+            <label class="form-label" for="set-email-code">Verification Code</label>
+            <input
+              id="set-email-code"
+              v-model="verifyCodeInput"
+              type="text"
+              inputmode="numeric"
+              maxlength="6"
+              placeholder="6-digit code"
+            >
+            <div class="settings-actions mt-8">
+              <button class="btn btn-primary btn-small" :disabled="verifyingCode" @click="submitVerifyCode">
+                Verify
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="form-group">

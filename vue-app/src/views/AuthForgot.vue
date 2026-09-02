@@ -1,13 +1,17 @@
 <script setup>
 /* ============================================================
-   AuthForgot.vue — reset a password with the security answer
-   Ported from Auth.renderForgot() / Auth.submitForgot() in auth.js.
+   AuthForgot.vue — reset a forgotten password with an emailed code
+
+   Two steps: (1) enter the username and request a code -- the backend
+   only sends one if that account's email is verified, and says so
+   plainly if it isn't; (2) enter the code plus a new password.
    ============================================================ */
 
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
+import { useResendCooldown } from '@/composables/useResendCooldown.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
@@ -17,8 +21,13 @@ const router = useRouter()
 
 const PW_HINT = 'At least 8 characters, with a letter, a number, and a special character.'
 
+// Mirrors the backend's 5-minute resend cooldown (see auth.py's
+// RESEND_COOLDOWN) so the button visibly can't be spammed.
+const RESEND_COOLDOWN_SECONDS = 300
+const cooldown = useResendCooldown()
+
 const username = ref(route.query.u || '')
-const answer = ref('')
+const code = ref('')
 const newPassword = ref('')
 const confirm = ref('')
 
@@ -26,31 +35,53 @@ const invalid = ref(new Set())
 const isInvalid = (key) => invalid.value.has(key)
 const clearInvalid = (key) => invalid.value.delete(key)
 
-const status = ref('Enter your username, security answer, and new password.')
+/* Step 2 only appears once a code has actually been sent. */
+const codeSent = ref(false)
+const sending = ref(false)
+const resetting = ref(false)
 
-/* The original updated this label on blur; now it's a ref refreshed
-   by a watcher since the lookup is a network call and can't run
-   inside a computed. */
-const DEFAULT_QUESTION_TEXT = 'Security question will be checked from your account.'
-const questionText = ref(DEFAULT_QUESTION_TEXT)
-watch(
-  username,
-  async (value) => {
-    const name = value.trim()
-    if (!name) {
-      questionText.value = DEFAULT_QUESTION_TEXT
+const status = ref('Enter your username to receive a password reset code by email.')
+
+async function sendCode() {
+  if (cooldown.active.value) return
+  if (!username.value.trim()) {
+    invalid.value = new Set(['username'])
+    await showMessage('Username Required', 'Please enter your username.')
+    return
+  }
+
+  sending.value = true
+  try {
+    await API.forgotSendCode(username.value.trim())
+  } catch (e) {
+    sending.value = false
+    if (e.retryAfterSeconds) {
+      // A code for this account went out recently -- not a real
+      // failure, just reflect the existing cooldown.
+      cooldown.start(e.retryAfterSeconds)
+      invalid.value = new Set()
+      codeSent.value = true
+      status.value = 'Please wait before requesting another code.'
       return
     }
-    const user = await API.getUserByUsername(name)
-    questionText.value = user?.security_question || DEFAULT_QUESTION_TEXT
-  },
-  { immediate: true },
-)
+    await showMessage('Could Not Send Code', e.message)
+    return
+  }
+  sending.value = false
+
+  invalid.value = new Set()
+  codeSent.value = true
+  cooldown.start(RESEND_COOLDOWN_SECONDS)
+  status.value = 'If that account has a verified email, a 6-digit code was sent to it.'
+}
+
+async function resendCode() {
+  await sendCode()
+}
 
 async function submit() {
   const blanks = []
-  if (!username.value.trim()) blanks.push('username')
-  if (!answer.value.trim()) blanks.push('answer')
+  if (!code.value.trim()) blanks.push('code')
   if (!newPassword.value.trim()) blanks.push('newPassword')
   if (!confirm.value.trim()) blanks.push('confirm')
 
@@ -73,18 +104,21 @@ async function submit() {
     return
   }
 
+  resetting.value = true
   let ok = false
   try {
-    ok = await API.resetPasswordWithSecurityAnswer(username.value.trim(), answer.value.trim(), newPassword.value)
+    ok = await API.forgotReset(username.value.trim(), code.value.trim(), newPassword.value)
   } catch (e) {
+    resetting.value = false
     await showMessage('Reset Failed', e.message)
     return
   }
+  resetting.value = false
 
   if (!ok) {
-    invalid.value = new Set(['username', 'answer'])
-    status.value = 'Username or security answer is incorrect.'
-    await showMessage('Reset Failed', 'Username or security answer is incorrect.')
+    invalid.value = new Set(['code'])
+    status.value = 'That code is incorrect or has expired.'
+    await showMessage('Reset Failed', 'That code is incorrect or has expired. Try resending a new one.')
     return
   }
 
@@ -98,7 +132,7 @@ async function submit() {
 
     <div class="auth-card">
       <div class="page-title">Reset Password</div>
-      <div class="muted-text">Answer your security question. No email required.</div>
+      <div class="muted-text">{{ status }}</div>
 
       <div class="form-group">
         <span class="form-label">Username <span class="required">*</span></span>
@@ -107,56 +141,76 @@ async function submit() {
           type="text"
           placeholder="Username"
           title="Enter the username of the local teacher account."
+          :disabled="codeSent"
           :class="{ invalid: isInvalid('username') }"
           @input="clearInvalid('username')"
         >
       </div>
 
-      <div class="section-title mb-8">{{ questionText }}</div>
-
-      <div class="form-group">
-        <span class="form-label">Security Answer <span class="required">*</span></span>
-        <PasswordField
-          v-model="answer"
-          placeholder="Security answer"
-          title="Enter the saved security answer."
-          :invalid="isInvalid('answer')"
-          @update:model-value="clearInvalid('answer')"
-        />
+      <div v-if="!codeSent" class="form-group">
+        <button class="btn btn-primary w-full" :disabled="sending" title="Send a reset code to this account's email." @click="sendCode">
+          Send Code
+        </button>
       </div>
 
-      <div class="form-group">
-        <span class="form-label">New Password <span class="required">*</span></span>
-        <PasswordField
-          v-model="newPassword"
-          placeholder="New password"
-          :title="PW_HINT"
-          :invalid="isInvalid('newPassword')"
-          @update:model-value="clearInvalid('newPassword')"
-        />
-        <PasswordRules :password="newPassword" />
-      </div>
+      <template v-else>
+        <div class="form-group">
+          <span class="form-label">Verification Code <span class="required">*</span></span>
+          <input
+            v-model="code"
+            type="text"
+            inputmode="numeric"
+            maxlength="6"
+            placeholder="6-digit code"
+            title="Enter the 6-digit code sent to your email."
+            :class="{ invalid: isInvalid('code') }"
+            @input="clearInvalid('code')"
+          >
+        </div>
+        <div class="form-group">
+          <button
+            class="btn btn-secondary"
+            :disabled="sending || cooldown.active.value"
+            title="Send another code."
+            @click="resendCode"
+          >
+            {{ cooldown.active.value ? `Resend Code (${cooldown.formatted.value})` : 'Resend Code' }}
+          </button>
+        </div>
 
-      <div class="form-group">
-        <span class="form-label">Confirm New Password <span class="required">*</span></span>
-        <PasswordField
-          v-model="confirm"
-          placeholder="Confirm new password"
-          title="Re-type the new password."
-          :invalid="isInvalid('confirm')"
-          @update:model-value="clearInvalid('confirm')"
-        />
-      </div>
+        <div class="form-group">
+          <span class="form-label">New Password <span class="required">*</span></span>
+          <PasswordField
+            v-model="newPassword"
+            placeholder="New password"
+            :title="PW_HINT"
+            :invalid="isInvalid('newPassword')"
+            @update:model-value="clearInvalid('newPassword')"
+          />
+          <PasswordRules :password="newPassword" />
+        </div>
 
-      <div class="muted-text">{{ status }}</div>
+        <div class="form-group">
+          <span class="form-label">Confirm New Password <span class="required">*</span></span>
+          <PasswordField
+            v-model="confirm"
+            placeholder="Confirm new password"
+            title="Re-type the new password."
+            :invalid="isInvalid('confirm')"
+            @update:model-value="clearInvalid('confirm')"
+          />
+        </div>
+      </template>
 
       <div class="flex gap-8">
         <RouterLink v-slot="{ navigate }" :to="{ name: 'login' }" custom>
           <button class="btn btn-secondary" title="Return to login." @click="navigate">Cancel</button>
         </RouterLink>
         <button
+          v-if="codeSent"
           class="btn btn-primary"
-          title="Save new password after verifying security answer."
+          :disabled="resetting"
+          title="Save the new password after verifying the code."
           @click="submit"
         >
           Save New Password

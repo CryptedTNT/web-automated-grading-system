@@ -64,6 +64,29 @@ special characters -- e.g. `*` becomes `%2A`), and generate a real
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
+### Gmail app password (for sending verification/reset codes)
+
+The backend sends the 6-digit verification and password-reset codes by
+email, via Gmail SMTP. It needs to log into a Gmail account to do that,
+and Google does not let apps use your normal account password -- you
+generate a separate, revocable "app password" instead:
+
+1. The Gmail account needs **2-Step Verification** turned on first
+   (Google Account -> Security -> 2-Step Verification).
+2. Google Account -> Security -> **App Passwords** -> create one, name
+   it something like "AGS backend" -> Google shows a 16-character
+   password once.
+3. Put that address and password in `.env`:
+   ```
+   SMTP_USER=your.sending.address@gmail.com
+   SMTP_APP_PASSWORD=the16characterapppassword
+   FROM_EMAIL=your.sending.address@gmail.com
+   ```
+
+This is the *server's* credential for sending mail -- unrelated to any
+teacher's own email address stored in `faculty.email`, and never shown
+to a teacher anywhere in the app.
+
 ## 5. Run
 
 ```

@@ -1,26 +1,26 @@
 <script setup>
 /* ============================================================
-   AuthSetup.vue — create the first teacher account
+   AuthSetup.vue — sign up: create a teacher account
    Ported from Auth.renderSetup() / Auth.submitSetup() in auth.js.
+   Multiple teachers can each have their own account -- this isn't
+   gated to "only when no account exists yet" (see router/index.js).
    ============================================================ */
 
 import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
+import { useAppStore } from '@/stores/app.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
 
 const router = useRouter()
+const store = useAppStore()
 
 const PW_HINT = 'At least 8 characters, with a letter, a number, and a special character.'
 
-const SECURITY_QUESTIONS = [
-  'What personal word can you remember?',
-  "What is your favorite teacher's nickname?",
-  'What memorable place do you remember?',
-]
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const form = reactive({
   fullname: '',
@@ -28,8 +28,7 @@ const form = reactive({
   username: '',
   password: '',
   confirm: '',
-  question: SECURITY_QUESTIONS[0],
-  answer: '',
+  email: '',
 })
 
 /* Fields flagged by the last failed submit. Cleared per-field as soon
@@ -38,15 +37,21 @@ const invalid = ref(new Set())
 const isInvalid = (key) => invalid.value.has(key)
 const clearInvalid = (key) => invalid.value.delete(key)
 
-const status = ref('No account found yet. Create the first teacher account to start.')
+const status = ref('Create a teacher account to get started.')
 
-const REQUIRED = ['fullname', 'institution', 'username', 'password', 'confirm', 'answer']
+const REQUIRED = ['fullname', 'institution', 'username', 'password', 'confirm', 'email']
 const blanks = computed(() => REQUIRED.filter((key) => !form[key].trim()))
 
 async function submit() {
   if (blanks.value.length) {
     invalid.value = new Set(blanks.value)
     await showMessage('Incomplete Setup', 'Please fill out all required fields.')
+    return
+  }
+
+  if (!EMAIL_PATTERN.test(form.email.trim())) {
+    invalid.value = new Set(['email'])
+    await showMessage('Invalid Email', 'Please enter a valid email address.')
     return
   }
 
@@ -63,21 +68,24 @@ async function submit() {
     return
   }
 
+  let user
   try {
-    await API.createUser(
+    user = await API.createUser(
       form.fullname,
       form.institution,
       form.username,
       form.password,
-      form.question,
-      form.answer,
+      form.email.trim(),
     )
   } catch (e) {
     await showMessage('Account Setup Failed', e.message)
     return
   }
 
-  router.push({ name: 'login', query: { u: form.username.trim(), status: 'created' } })
+  // Registering also signs the account in server-side, so pick straight
+  // up where AuthLogin.vue would leave off and head into email verification.
+  await store.signIn(user)
+  router.push({ name: 'verify_email' })
 }
 </script>
 
@@ -149,31 +157,31 @@ async function submit() {
       </div>
 
       <div class="form-group">
-        <span class="form-label">Security Question <span class="required">*</span></span>
-        <select v-model="form.question" title="Choose a security question for password reset.">
-          <option v-for="question in SECURITY_QUESTIONS" :key="question">{{ question }}</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <span class="form-label">Security Answer <span class="required">*</span></span>
-        <PasswordField
-          v-model="form.answer"
-          placeholder="Security answer"
-          title="Enter the answer for password reset."
-          :invalid="isInvalid('answer')"
-          @update:model-value="clearInvalid('answer')"
-        />
+        <span class="form-label">Email <span class="required">*</span></span>
+        <input
+          v-model="form.email"
+          type="email"
+          placeholder="you@example.com"
+          title="Enter an email address. You'll verify it next, and it's needed to reset your password later."
+          :class="{ invalid: isInvalid('email') }"
+          @input="clearInvalid('email')"
+        >
       </div>
 
       <div class="muted-text">{{ status }}</div>
       <button
         class="btn btn-primary w-full"
-        title="Create the local teacher account and proceed to login."
+        title="Create the local teacher account and proceed to email verification."
         @click="submit"
       >
         Create Account
       </button>
+
+      <div class="muted-text text-center mt-8">
+        Already have an account?
+        <RouterLink :to="{ name: 'login' }">Login</RouterLink>
+      </div>
+
       <div class="spacer"></div>
     </div>
   </div>
