@@ -16,6 +16,25 @@
 
 const BASE = '/api'
 
+/* A 401 from any real (already-authenticated) endpoint means this tab's
+   session died server-side -- logged out in another tab, expired, or
+   this is a stale tab left open from before a logout. The router guard
+   alone doesn't catch this: it only checks this tab's in-memory
+   store.isSignedIn, which still says "signed in" from before the
+   cookie went bad, so it never re-asks the server. Without this, a
+   page just silently keeps whatever default/empty state it started
+   with (e.g. Dashboard's stats sitting at 0) instead of bouncing to
+   login. /auth/login and /auth/me are excluded by callers: a 401 from
+   those is an expected, normal outcome (wrong password; not-yet-signed-
+   in probe), not a dead session. Returns true if it handled the
+   response (a reload is already underway, so the caller should stop). */
+function handleIfSessionExpired(res, path) {
+  if (res.status !== 401 || path === '/auth/login' || path === '/auth/me') return false
+  window.location.hash = '#/login?status=expired'
+  window.location.reload()
+  return true
+}
+
 async function request(method, path, body) {
   const opts = {
     method,
@@ -32,6 +51,7 @@ async function request(method, path, body) {
     data = null
   }
   if (!res.ok) {
+    if (handleIfSessionExpired(res, path)) return new Promise(() => {}) // navigation is already happening
     const message = (data && data.detail) || `Request failed: ${method} ${path} (${res.status})`
     const error = new Error(typeof message === 'string' ? message : JSON.stringify(message))
     // 429s from the resend-code cooldown carry a standard Retry-After
@@ -99,7 +119,11 @@ export const API = {
   async verifyUser(username, password) {
     try {
       return await post('/auth/login', { username, password })
-    } catch {
+    } catch (e) {
+      // A 429 here means the account is rate-limited, not that the
+      // password was wrong -- let the caller tell those apart instead
+      // of collapsing every failure into "invalid credentials".
+      if (e.retryAfterSeconds) throw e
       return null
     }
   },
@@ -203,15 +227,24 @@ export const API = {
   async clearSession(sessionId) {
     await del(`/sessions/${sessionId}`)
   },
-  async uploadSheet(sessionId, file) {
+  async uploadSheetGroup(sessionId, files, consentConfirmed) {
     // Not part of database.js's surface -- there was no equivalent
-    // concept when grading was a client-side placeholder. Uploading one
-    // file at a time (rather than batching the whole queue into one
-    // request) is what lets the Processing page show real per-file
-    // progress, since this blocks until that sheet's real YOLO+TrOCR
+    // concept when grading was a client-side placeholder. `files` is
+    // every page of ONE student's submission, in page order (page 1
+    // first -- the only one expected to carry a Name/Section header;
+    // see backend/app/inference/pipeline.py's run_sheet_group). One
+    // group per request (rather than the whole queue in one request)
+    // is what lets the Processing page show real per-student progress,
+    // since this blocks until that submission's real YOLO+TrOCR
     // grading has committed server-side.
+    //
+    // consentConfirmed is the teacher's own attestation, made once on
+    // the Upload page, that paper consent was already collected for
+    // this whole queue -- sent with every group so it's what
+    // student_info.consent_status actually records per submission.
     const formData = new FormData()
-    formData.append('files', file)
+    for (const file of files) formData.append('files', file)
+    formData.append('consent_confirmed', consentConfirmed ? 'true' : 'false')
     const res = await fetch(`${BASE}/sessions/${sessionId}/sheets`, {
       method: 'POST',
       credentials: 'include',
@@ -224,6 +257,8 @@ export const API = {
       data = null
     }
     if (!res.ok) {
+      const path = `/sessions/${sessionId}/sheets`
+      if (handleIfSessionExpired(res, path)) return new Promise(() => {}) // navigation is already happening
       const message = (data && data.detail) || `Upload failed (${res.status})`
       throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
     }

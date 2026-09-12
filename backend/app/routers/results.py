@@ -14,6 +14,7 @@ from app.models import (
     AnswerKeyItem,
     Faculty,
     GradingResult,
+    GradingSession,
     ManualReview,
     StudentAnswer,
     VFlaggedQueue,
@@ -24,6 +25,40 @@ from app.schemas import ReviewRequest
 from app.security import get_current_faculty
 
 router = APIRouter(tags=["results"])
+
+
+def _owned_session_id(session_id: int, faculty: Faculty, db: Session) -> int:
+    """404s unless `session_id` belongs to `faculty` -- every endpoint
+    below must call this (or _owned_sheet_id/_owned_result) before
+    touching another table, or any signed-in teacher could read or
+    grade-override another teacher's students by guessing an id."""
+    owned = db.scalar(
+        select(GradingSession.session_id).where(
+            GradingSession.session_id == session_id, GradingSession.faculty_id == faculty.faculty_id
+        )
+    )
+    if owned is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return owned
+
+
+def _owned_sheet_id(sheet_id: int, faculty: Faculty, db: Session) -> int:
+    owned = db.scalar(
+        select(VSheetResult.sheet_id)
+        .join(GradingSession, GradingSession.session_id == VSheetResult.session_id)
+        .where(VSheetResult.sheet_id == sheet_id, GradingSession.faculty_id == faculty.faculty_id)
+    )
+    if owned is None:
+        raise HTTPException(status_code=404, detail="Sheet not found.")
+    return owned
+
+
+def _owned_result(result_id: int, faculty: Faculty, db: Session) -> GradingResult:
+    result = db.get(GradingResult, result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found.")
+    _owned_sheet_id(result.sheet_id, faculty, db)
+    return result
 
 
 def _sheet_shape(row: VSheetResult) -> dict:
@@ -69,6 +104,7 @@ def _item_shape(row: VResultItem) -> dict:
 def session_results(
     session_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)
 ):
+    _owned_session_id(session_id, faculty, db)
     rows = db.scalars(
         select(VSheetResult).where(VSheetResult.session_id == session_id).order_by(VSheetResult.sheet_id)
     )
@@ -77,6 +113,7 @@ def session_results(
 
 @router.get("/sheets/{sheet_id}")
 def sheet_result(sheet_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
+    _owned_sheet_id(sheet_id, faculty, db)
     row = db.scalar(select(VSheetResult).where(VSheetResult.sheet_id == sheet_id))
     if not row:
         raise HTTPException(status_code=404, detail="Sheet not found.")
@@ -85,6 +122,7 @@ def sheet_result(sheet_id: int, faculty: Faculty = Depends(get_current_faculty),
 
 @router.get("/sheets/{sheet_id}/items")
 def sheet_items(sheet_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
+    _owned_sheet_id(sheet_id, faculty, db)
     rows = db.scalars(select(VResultItem).where(VResultItem.sheet_id == sheet_id).order_by(VResultItem.item_no))
     return [_item_shape(r) for r in rows]
 
@@ -96,6 +134,7 @@ def next_flagged(
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
+    _owned_session_id(session_id, faculty, db)
     query = select(VFlaggedQueue).where(VFlaggedQueue.session_id == session_id)
     if prefer_result_id is not None:
         # Stay on the sheet the teacher is already reviewing until it has
@@ -128,9 +167,7 @@ def review_result(
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
-    result = db.get(GradingResult, result_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found.")
+    result = _owned_result(result_id, faculty, db)
     item = db.get(AnswerKeyItem, result.item_id)
 
     original_answer = None
@@ -138,13 +175,27 @@ def review_result(
         answer_row = db.get(StudentAnswer, result.recognized_id)
         original_answer = answer_row.recognized_text if answer_row else None
 
+    # Captured before either gets overwritten below -- auto_status/auto_score
+    # are separately preserved forever (deliberately untouched, see below),
+    # but status/match_score are not, so this is the only place that still
+    # has "what the auto-grader originally decided" once this function
+    # starts mutating result. Used only for the remarks text.
+    previous_status = result.status
+    previous_match = float(result.match_score) if result.match_score is not None else 0.0
+
     if body.action == "accepted_correct":
         result.score, result.status = item.points, "correct"
+        result.remarks = f"Manually reviewed: accepted as correct (was {previous_status} at {previous_match:.1f}% match)."
     elif body.action == "marked_incorrect":
         result.score, result.status = 0, "incorrect"
+        result.remarks = f"Manually reviewed: marked incorrect (was {previous_status} at {previous_match:.1f}% match)."
     else:  # manual_answer_override
         result.score, result.status = item.points, "correct"
         result.match_score = 100
+        result.remarks = (
+            f'Manually reviewed: answer corrected to "{body.corrected_answer}" '
+            f"(was {previous_status} at {previous_match:.1f}% match)."
+        )
         if body.corrected_answer and result.recognized_id:
             answer_row = db.get(StudentAnswer, result.recognized_id)
             if answer_row:

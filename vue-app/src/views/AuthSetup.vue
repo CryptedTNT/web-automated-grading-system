@@ -30,6 +30,7 @@ const form = reactive({
   confirm: '',
   email: '',
 })
+const agreedToTerms = ref(false)
 
 /* Fields flagged by the last failed submit. Cleared per-field as soon
    as the teacher edits that field, matching _clearInvalid(). */
@@ -52,6 +53,11 @@ async function submit() {
   if (!EMAIL_PATTERN.test(form.email.trim())) {
     invalid.value = new Set(['email'])
     await showMessage('Invalid Email', 'Please enter a valid email address.')
+    return
+  }
+
+  if (!agreedToTerms.value) {
+    await showMessage('Agreement Required', 'You must agree to the Terms and Privacy Policy to create an account.')
     return
   }
 
@@ -94,7 +100,7 @@ async function submit() {
     <HeroPanel />
 
     <div class="auth-card">
-      <div class="page-title">Set up your account</div>
+      <h1 class="page-title">Set up your account</h1>
       <div class="muted-text">Create your teacher account to get started.</div>
 
       <div class="form-group">
@@ -104,6 +110,7 @@ async function submit() {
           type="text"
           placeholder="Full name"
           title="Enter the full name of the teacher account owner."
+          aria-label="Full name"
           :class="{ invalid: isInvalid('fullname') }"
           @input="clearInvalid('fullname')"
         >
@@ -116,6 +123,7 @@ async function submit() {
           type="text"
           placeholder="Institution"
           title="Enter the school or institution name."
+          aria-label="Institution"
           :class="{ invalid: isInvalid('institution') }"
           @input="clearInvalid('institution')"
         >
@@ -128,6 +136,7 @@ async function submit() {
           type="text"
           placeholder="Username"
           title="Create a local username for signing in."
+          aria-label="Username"
           :class="{ invalid: isInvalid('username') }"
           @input="clearInvalid('username')"
         >
@@ -163,10 +172,24 @@ async function submit() {
           type="email"
           placeholder="you@example.com"
           title="Enter an email address. You'll verify it next, and it's needed to reset your password later."
+          aria-label="Email address"
           :class="{ invalid: isInvalid('email') }"
           @input="clearInvalid('email')"
         >
       </div>
+
+      <label class="checkbox-row mb-8">
+        <input
+          v-model="agreedToTerms"
+          type="checkbox"
+          title="You must agree to the Terms and Privacy Policy to create an account."
+        >
+        <span>
+          I agree to the
+          <RouterLink :to="{ name: 'terms' }" target="_blank">Terms</RouterLink> and
+          <RouterLink :to="{ name: 'privacy' }" target="_blank">Privacy Policy</RouterLink>.
+        </span>
+      </label>
 
       <div class="muted-text">{{ status }}</div>
       <button

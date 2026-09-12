@@ -26,6 +26,7 @@ from app.schemas import (
     UpdateProfileRequest,
     VerifyEmailCodeRequest,
 )
+from app.rate_limit import check_rate_limit, reset_rate_limit
 from app.security import (
     generate_numeric_code,
     get_current_faculty,
@@ -171,12 +172,24 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     return _public_shape(faculty)
 
 
+LOGIN_MAX_ATTEMPTS = 10
+LOGIN_WINDOW_SECONDS = 15 * 60
+
+
 @router.post("/auth/login")
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    # Keyed on username, not IP: an IP-based limit is trivially spread
+    # across many source addresses, but this is what actually stops a
+    # single account being password-guessed regardless of where the
+    # requests come from.
+    rate_key = f"login:{body.username.strip().lower()}"
+    check_rate_limit(rate_key, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS)
+
     faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
     if not faculty or not verify_and_maybe_migrate(faculty, body.password, db):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
+    reset_rate_limit(rate_key)
     faculty.last_login_at = datetime.datetime.utcnow()
     db.add(faculty)
     db.commit()
@@ -236,10 +249,15 @@ def update_email(
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
-    faculty.email = body.email
-    faculty.email_verified = 0  # a changed email is unverified until proven again
-    db.add(faculty)
-    db.commit()
+    # Only a genuinely NEW email should lose its verified status -- this
+    # used to reset it unconditionally, so re-saving the same address
+    # (e.g. clicking "Save Email" without changing anything) silently
+    # un-verified an already-verified account for no reason.
+    if body.email != faculty.email:
+        faculty.email = body.email
+        faculty.email_verified = 0
+        db.add(faculty)
+        db.commit()
     return _public_shape(faculty)
 
 
@@ -267,8 +285,11 @@ def verify_email_code(
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
+    rate_key = f"verify_email_code:{faculty.faculty_id}"
+    check_rate_limit(rate_key, max_attempts=10, window_seconds=int(CODE_LIFETIME.total_seconds()))
     if not _check_code(faculty, "verify_email", body.code, db):
         return {"ok": False}
+    reset_rate_limit(rate_key)
     faculty.email_verified = 1
     db.add(faculty)
     db.commit()
@@ -284,20 +305,26 @@ def verify_email_code(
 
 @router.post("/auth/forgot/send-code")
 def forgot_send_code(body: ForgotSendCodeRequest, db: Session = Depends(get_db)):
-    faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
-    if not faculty:
-        # Same generic response as "sent" -- don't confirm a nonexistent
-        # username. (An existing-but-unverified account DOES get a
-        # specific message below; seeAppMapping/plan for why that
-        # tradeoff was made deliberately, not by oversight.)
-        return {"ok": True}
+    """Always the same {"ok": True} shape whether the username doesn't
+    exist, exists with no verified email, or exists and gets a real
+    code -- previously the unverified case raised a distinct 400 with
+    an explicit message, which let anyone confirm a username was
+    registered (and unverified) in a single request without ever
+    knowing the password. The frontend (AuthForgot.vue) already only
+    ever displays a generic "if that account has a verified email..."
+    message here, so this doesn't remove any real feedback the UI was
+    relying on -- it just stops leaking through the status code.
 
-    if not faculty.email or not faculty.email_verified:
-        raise HTTPException(
-            status_code=400,
-            detail="This account's email hasn't been verified, so it can't be used to reset the "
-            "password yet. Sign in and verify it from Settings first.",
-        )
+    The one residual signal is the 429 below: a real, verified account
+    that was just emailed a code will rate-limit a second rapid request
+    while an unknown/unverified username never will. That's a much
+    weaker leak (needs two requests within the resend cooldown, not
+    one) and is the cost of the resend cooldown actually working --
+    accepted deliberately rather than by oversight.
+    """
+    faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
+    if not faculty or not faculty.email or not faculty.email_verified:
+        return {"ok": True}
 
     _require_not_cooling_down(faculty, "reset_password", db)
     code = _issue_code(faculty, "reset_password", db)
@@ -314,9 +341,20 @@ def forgot_reset(body: ForgotResetRequest, db: Session = Depends(get_db)):
     if not faculty:
         return {"ok": False}
 
+    # Keyed on faculty_id, not IP, same reasoning as login: this is a
+    # public, unauthenticated endpoint guarding a 6-digit code, so
+    # without this an attacker who already knows/guessed the username
+    # could brute-force the 1-in-a-million code within its 10-minute
+    # lifetime. Resending a code (above) is separately cooled down;
+    # this limits how many times an *already-issued* code can be
+    # guessed against.
+    rate_key = f"reset_guess:{faculty.faculty_id}"
+    check_rate_limit(rate_key, max_attempts=10, window_seconds=int(CODE_LIFETIME.total_seconds()))
+
     if not _check_code(faculty, "reset_password", body.code, db):
         return {"ok": False}
 
+    reset_rate_limit(rate_key)
     faculty.password_hash = hash_password(body.new_password)
     faculty.password_salt = None
     db.add(faculty)

@@ -13,6 +13,7 @@ import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { exportSessionToFile } from '@/services/export.js'
+import { formatDateTime } from '@/services/datetime.js'
 
 const router = useRouter()
 const store = useAppStore()
@@ -129,12 +130,16 @@ function statusClass(status) {
       <div class="stat-card">
         <div class="stat-label">Average Score</div>
         <div class="stat-value">{{ selectedStats.average }}%</div>
-        <div class="stat-delta">Selected session</div>
+        <div class="stat-delta">
+          {{ selectedSession ? `Session #${selectedSession.id}` : 'No session selected' }}
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Flagged Items</div>
         <div class="stat-value">{{ selectedStats.flagged }}</div>
-        <div class="stat-delta">Selected session</div>
+        <div class="stat-delta">
+          {{ selectedSession ? `Session #${selectedSession.id}` : 'No session selected' }}
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-label">All Sessions</div>
@@ -148,7 +153,7 @@ function statusClass(status) {
       <select id="rpt-session" v-model="sessionId">
         <option v-if="!sessions.length" :value="null">No sessions available</option>
         <option v-for="session in sessions" :key="session.id" :value="session.id">
-          #{{ session.id }} - {{ session.created_at }} - {{ session.answer_key_name || 'No key' }}
+          #{{ session.id }} - {{ formatDateTime(session.created_at) }} - {{ session.answer_key_name || 'No key' }}
         </option>
       </select>
       <div class="spacer"></div>
@@ -178,7 +183,7 @@ function statusClass(status) {
               :class="{ selected: session.id === store.currentSessionId }"
             >
               <td>#{{ session.id }}</td>
-              <td>{{ session.created_at }}</td>
+              <td>{{ formatDateTime(session.created_at) }}</td>
               <td>{{ session.answer_key_name || 'No key' }}</td>
               <td>{{ session.sheets }}</td>
               <td>{{ session.average }}%</td>
@@ -186,9 +191,16 @@ function statusClass(status) {
               <td>
                 <span class="badge" :class="statusClass(session.status)">{{ session.status }}</span>
               </td>
-              <td>
+              <td class="table-actions">
                 <button class="btn btn-secondary btn-small" @click="viewSession(session.id)">
                   View
+                </button>
+                <button
+                  class="btn btn-success btn-small"
+                  title="Download this session's own Excel file"
+                  @click="exportSessionToFile(session.id)"
+                >
+                  Download
                 </button>
               </td>
             </tr>

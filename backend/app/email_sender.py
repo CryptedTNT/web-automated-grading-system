@@ -1,12 +1,3 @@
-"""Sends the 6-digit verification/reset codes by email.
-
-Uses Gmail SMTP with an app password -- see backend/SETUP.md for how to
-generate one. The app password is what lets this server authenticate to
-Gmail and send mail at all; it is unrelated to the 6-digit codes
-themselves, which are generated fresh per request in app/security.py
-and are the thing a teacher actually reads and types back into the app.
-"""
-
 import smtplib
 from email.message import EmailMessage
 

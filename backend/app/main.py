@@ -14,8 +14,15 @@ app = FastAPI(title="Automated Grading System API")
 
 # Signed-cookie session, the direct equivalent of Flask's session[...] --
 # see app/security.py for why this project uses cookie sessions instead
-# of JWTs.
-app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, same_site="lax")
+# of JWTs. https_only follows SESSION_COOKIE_SECURE (see config.py) --
+# must be true in production, since a session cookie without it can be
+# read over an unencrypted connection (e.g. on public wifi).
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.secret_key,
+    same_site="lax",
+    https_only=settings.session_cookie_secure,
+)
 
 # Only needed if the Vue dev server talks to this API cross-origin
 # instead of through the Vite proxy (vue-app/vite.config.js). Harmless

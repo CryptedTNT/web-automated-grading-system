@@ -61,13 +61,67 @@ class GradeVerdict:
 
 
 def grade_exact(recognized: str | None, correct: str, alternatives: str | None, points: float) -> GradeVerdict:
-    """Multiple Choice / True-or-False: exact match (case/whitespace-
-    insensitive) against the correct answer or any listed alternative --
-    these types have a fixed set of valid values, so "close but not
-    exact" is genuinely wrong, not a fuzzy-match candidate."""
+    """True-or-False: exact match (case/whitespace-insensitive) against
+    the correct answer or any listed alternative -- this type has a
+    fixed set of valid values, so "close but not exact" is genuinely
+    wrong, not a fuzzy-match candidate."""
     recognized_norm = (recognized or "").strip().lower()
     for candidate in [correct, *_split_alternatives(alternatives)]:
         if recognized_norm and recognized_norm == candidate.strip().lower():
+            return GradeVerdict("correct", points, 100.0)
+    return GradeVerdict(
+        "incorrect", 0.0, 0.0, f'Recognized "{recognized}"; correct answer is "{correct}".'
+    )
+
+
+def _split_choice_letters(text: str | None) -> set[str]:
+    """Splits an MC answer into a normalized set of single letters --
+    "a", "A, B", "ABC", and "a b  c" all produce the same kind of set.
+    A run of letters with no separator ("ABC") is treated as one letter
+    per character, since MC choices here are always single letters
+    (a/b/c/d): a student writing multiple selections together without
+    spacing/commas is still selecting multiple letters, not one word."""
+    if not text:
+        return set()
+    tokens = [t for t in re.split(r"[^a-zA-Z]+", text.strip()) if t]
+    letters: set[str] = set()
+    for token in tokens:
+        letters.update(token.lower())
+    return letters
+
+
+def grade_multiple_choice(recognized: str | None, correct: str, alternatives: str | None, points: float) -> GradeVerdict:
+    """Multiple Choice, including "select all that apply" items whose
+    correct answer lists more than one letter (e.g. correct_answer
+    "a,b,c"): correct only if the exact SET of letters the student
+    wrote matches the correct set -- order doesn't matter, but nothing
+    may be missing or extra (all-or-nothing, no partial credit). A
+    single-letter correct answer behaves identically to a plain exact
+    match, since comparing two one-element sets is the same thing --
+    every existing single-answer MC item is unaffected by this.
+
+    A single-answer item where the recognized text has MORE than one
+    letter is not treated as a failed multi-select -- it's very likely
+    a scratched-out answer with the correction written right next to
+    it (e.g. a crossed-out "B" beside a clear "C"), which the OCR still
+    reads as two characters even though a human can tell the intended
+    final answer. Auto-grading that as wrong would silently sink an
+    actually-correct answer, so it's flagged for a teacher to check
+    instead of guessed at either way."""
+    recognized_letters = _split_choice_letters(recognized)
+    correct_letters = _split_choice_letters(correct)
+
+    if len(correct_letters) == 1 and len(recognized_letters) > 1:
+        return GradeVerdict(
+            "flagged",
+            0.0,
+            0.0,
+            f'Recognized "{recognized}" -- more than one letter for a single-answer item, '
+            "likely a crossed-out/corrected answer; needs review.",
+        )
+
+    for candidate in [correct, *_split_alternatives(alternatives)]:
+        if recognized_letters and recognized_letters == _split_choice_letters(candidate):
             return GradeVerdict("correct", points, 100.0)
     return GradeVerdict(
         "incorrect", 0.0, 0.0, f'Recognized "{recognized}"; correct answer is "{correct}".'

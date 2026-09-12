@@ -1,0 +1,30 @@
+# systemd unit for the FastAPI backend -- keeps it running across crashes
+# and reboots, instead of a manually-run terminal command.
+#
+# Install:
+#   sudo cp deploy/ags-backend.service /etc/systemd/system/
+#   (edit the paths below to match where you cloned the repo)
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ags-backend
+#
+# Logs: journalctl -u ags-backend -f
+
+[Unit]
+Description=Automated Grading System -- FastAPI backend
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+# CHANGE these three paths to match your actual deployment location/user.
+User=ags
+WorkingDirectory=/opt/ags/backend
+ExecStart=/opt/ags/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+
+# Bound to 127.0.0.1 above -- only reachable from this machine (Caddy's
+# reverse proxy), never directly from the internet.
+
+[Install]
+WantedBy=multi-user.target

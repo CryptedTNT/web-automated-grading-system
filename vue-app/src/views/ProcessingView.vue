@@ -42,23 +42,26 @@ onMounted(() => {
 })
 watch(() => store.selectedAnswerKeyId, loadJobDetails)
 
-const files = computed(() => store.uploadFiles)
+/* Each entry is one student's whole submission (one or more pages) --
+   see UploadView.vue's grouping and stores/processing.js's _run(). */
+const groups = computed(() => store.uploadFiles)
+const totalPages = computed(() => groups.value.reduce((sum, group) => sum + group.pages.length, 0))
 
 const canOpenResults = computed(() => Boolean(job.sessionId || store.currentSessionId))
 
 const startDisabled = computed(
-  () => job.isRunning || (job.status === 'completed' && !files.value.length),
+  () => job.isRunning || (job.status === 'completed' && !groups.value.length),
 )
 
-const countLabel = computed(() => `${job.completed} / ${job.total || files.value.length} files`)
+const countLabel = computed(() => `${job.completed} / ${job.total || groups.value.length} submissions`)
 
 const currentLabel = computed(() => {
-  if (job.isRunning && job.cancelRequested) return 'Cancelling after the current image...'
+  if (job.isRunning && job.cancelRequested) return 'Cancelling after the current submission...'
   if (job.isRunning && job.currentFile) return `Processing ${job.currentFile}`
   if (job.status === 'completed') return `Session #${job.sessionId} is ready for review.`
   if (job.status === 'cancelled') return `Session #${job.sessionId} was cancelled.`
   if (job.status === 'error') return job.error || 'Processing failed.'
-  return files.value.length ? `${files.value.length} image(s) ready.` : 'No images are queued.'
+  return groups.value.length ? `${groups.value.length} submission(s) ready.` : 'No submissions are queued.'
 })
 
 const emptyLogMessage = computed(
@@ -137,7 +140,8 @@ function openResults() {
         <dl class="job-details">
           <div><dt>Answer key</dt><dd>{{ answerKey?.name || 'Not selected' }}</dd></div>
           <div><dt>Key items</dt><dd>{{ keyItems.length }}</dd></div>
-          <div><dt>Queued images</dt><dd>{{ files.length }}</dd></div>
+          <div><dt>Queued submissions</dt><dd>{{ groups.length }}</dd></div>
+          <div><dt>Queued pages</dt><dd>{{ totalPages }}</dd></div>
           <div>
             <dt>Session</dt>
             <dd>{{ job.sessionId ? `#${job.sessionId}` : 'Not created' }}</dd>

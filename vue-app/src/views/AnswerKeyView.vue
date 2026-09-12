@@ -22,6 +22,13 @@ import {
 } from 'docx'
 import { API } from '@/services/api.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
+import {
+  escapeHtml,
+  labeledSections,
+  SECTION_META,
+  questionnaireHtml,
+  paginatePreview,
+} from '@/services/questionnaireTemplate.js'
 
 const Q_TYPES = ['Multiple Choice', 'True or False', 'Identification', 'Enumeration']
 const MC_LETTERS = ['a', 'b', 'c', 'd']
@@ -31,10 +38,14 @@ const currentKeyId = ref(null)
 const creatingNew = ref(false)
 const keyName = ref('')
 
-const mcItems = ref([])
-const tfItems = ref([])
-const idItems = ref([])
-const enumGroups = ref([])
+/* Test sections, in the order the teacher built them -- each one picks
+   its own question type from a dropdown (see qbSectionHeader in the
+   template), and a type can only be used by one section at a time (see
+   usedTypes/availableTypesFor below). This is what fixes numbering: I,
+   II, III... reflect actual section order, never a fixed
+   type-to-Roman-numeral mapping. */
+const ROMAN = ['I', 'II', 'III', 'IV']
+const qbSections = ref([])
 /* Any saved row whose `type` isn't one of the 4 known values (e.g. hand-edited
    localStorage) is carried through unedited rather than silently dropped. */
 const otherItems = ref([])
@@ -43,6 +54,21 @@ const otherItems = ref([])
    saved — so each one carries a local uid, shared across every section. */
 let nextUid = 1
 
+/* Multiple Choice's "correct" answer is a set of one or more letters --
+   plain "a" for a normal item, "a,b,c" for a "select all that apply"
+   one (backend/app/inference/grading.py's grade_multiple_choice grades
+   these as an exact-set match, all-or-nothing). Stored as a
+   comma-separated string; edited here as an array so the template can
+   bind it straight to a group of checkboxes. */
+function parseCorrectLetters(raw) {
+  const letters = String(raw || '')
+    .toLowerCase()
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => MC_LETTERS.includes(s))
+  return letters.length ? letters : ['a']
+}
+
 function makeMcItem(item) {
   const v = item || {}
   const choices = v.choices || {}
@@ -50,7 +76,7 @@ function makeMcItem(item) {
     uid: nextUid++,
     question_text: v.question_text ?? '',
     choices: { a: choices.a ?? '', b: choices.b ?? '', c: choices.c ?? '', d: choices.d ?? '' },
-    correct: v.correct_answer || 'a',
+    correct: parseCorrectLetters(v.correct_answer),
     points: v.points ?? 1,
     threshold: v.fuzzy_threshold ?? 100,
   }
@@ -98,6 +124,43 @@ function makeEnumGroup(questionText, blankItems) {
   }
 }
 
+/* One fresh row for a brand-new section of this type, or after a
+   section's type is switched (see onSectionTypeChange). */
+function defaultItemsForType(type) {
+  if (type === 'Multiple Choice') return [makeMcItem()]
+  if (type === 'True or False') return [makeTfItem()]
+  if (type === 'Identification') return [makeIdItem()]
+  if (type === 'Enumeration') return [makeEnumGroup()]
+  return []
+}
+
+/* Rebuilds one section's items from saved rows, dispatching by type --
+   used when loading a key (see loadKey). */
+function buildSectionItems(type, rows) {
+  if (type === 'Multiple Choice') return rows.map(makeMcItem)
+  if (type === 'True or False') return rows.map(makeTfItem)
+  if (type === 'Identification') return rows.map(makeIdItem)
+  if (type === 'Enumeration') {
+    const groups = new Map()
+    rows.forEach((row) => {
+      // Legacy rows saved before grouping was auto-assigned may lack enum_group.
+      const groupKey = row.enum_group != null ? row.enum_group : `solo-${row.id}`
+      if (!groups.has(groupKey)) groups.set(groupKey, [])
+      groups.get(groupKey).push(row)
+    })
+    return [...groups.values()].map((groupRows) => makeEnumGroup(groupRows[0]?.question_text, groupRows))
+  }
+  return []
+}
+
+function itemHasContent(type, item) {
+  if (type === 'Multiple Choice') return Boolean(item.question_text.trim() || Object.values(item.choices).some((c) => c.trim()))
+  if (type === 'True or False') return Boolean(item.question_text.trim())
+  if (type === 'Identification') return Boolean(item.question_text.trim() || String(item.correct).trim())
+  if (type === 'Enumeration') return Boolean(item.question_text.trim() || item.blanks.some((b) => String(b.correct).trim()))
+  return false
+}
+
 /* Serialized copy of the last saved (or freshly loaded) state. Comparing
    against it is what tells us the builder has unsaved edits — without this
    the original replaced everything on a stray click in the sidebar and a
@@ -117,10 +180,7 @@ function stripUid(value) {
 function snapshot() {
   return JSON.stringify({
     name: keyName.value.trim(),
-    mc: stripUid(mcItems.value),
-    tf: stripUid(tfItems.value),
-    id: stripUid(idItems.value),
-    enumGroups: stripUid(enumGroups.value),
+    sections: qbSections.value.map((section) => ({ type: section.type, items: stripUid(section.items) })),
     other: otherItems.value,
   })
 }
@@ -152,21 +212,28 @@ async function loadKey(keyId) {
   keyName.value = key.name
 
   const items = await API.answerKeyItems(keyId)
-  mcItems.value = items.filter((i) => i.type === 'Multiple Choice').map(makeMcItem)
-  tfItems.value = items.filter((i) => i.type === 'True or False').map(makeTfItem)
-  idItems.value = items.filter((i) => i.type === 'Identification').map(makeIdItem)
-
-  const enumRows = items.filter((i) => i.type === 'Enumeration')
-  const groups = new Map()
-  enumRows.forEach((row) => {
-    // Legacy rows saved before grouping was auto-assigned may lack enum_group.
-    const groupKey = row.enum_group != null ? row.enum_group : `solo-${row.id}`
-    if (!groups.has(groupKey)) groups.set(groupKey, [])
-    groups.get(groupKey).push(row)
-  })
-  enumGroups.value = [...groups.values()].map((rows) => makeEnumGroup(rows[0]?.question_text, rows))
-
   otherItems.value = items.filter((i) => !Q_TYPES.includes(i.type))
+
+  // Items arrive ordered by item_no (see backend/app/routers/answer_keys.py),
+  // and collectItems() always writes one type's items as one contiguous
+  // block -- so the order distinct types first appear in IS the section
+  // order the teacher originally built, with no extra bookkeeping needed.
+  const rowsByType = new Map()
+  const typeOrder = []
+  items.forEach((row) => {
+    if (!Q_TYPES.includes(row.type)) return
+    if (!rowsByType.has(row.type)) {
+      rowsByType.set(row.type, [])
+      typeOrder.push(row.type)
+    }
+    rowsByType.get(row.type).push(row)
+  })
+
+  qbSections.value = typeOrder.map((type) => ({
+    uid: nextUid++,
+    type,
+    items: buildSectionItems(type, rowsByType.get(type)),
+  }))
 
   savedSnapshot.value = snapshot()
 }
@@ -193,115 +260,164 @@ async function newKey() {
   creatingNew.value = true
   currentKeyId.value = null
   keyName.value = nextKeyName()
-  mcItems.value = []
-  tfItems.value = []
-  idItems.value = []
-  enumGroups.value = []
+  qbSections.value = [{ uid: nextUid++, type: 'Multiple Choice', items: defaultItemsForType('Multiple Choice') }]
   otherItems.value = []
   savedSnapshot.value = snapshot()
 }
 
-function addMcItem() { mcItems.value.push(makeMcItem()) }
-function removeMcItem(uid) { mcItems.value = mcItems.value.filter((r) => r.uid !== uid) }
+/* ---------------------------------------------------- Test sections */
 
-function addTfItem() { tfItems.value.push(makeTfItem()) }
-function removeTfItem(uid) { tfItems.value = tfItems.value.filter((r) => r.uid !== uid) }
+const usedTypes = computed(() => new Set(qbSections.value.map((s) => s.type)))
+const canAddSection = computed(() => usedTypes.value.size < Q_TYPES.length)
 
-function addIdItem() { idItems.value.push(makeIdItem()) }
-function removeIdItem(uid) { idItems.value = idItems.value.filter((r) => r.uid !== uid) }
+/* A section's own current type stays selectable in its own dropdown;
+   every other section's type is excluded so the same type can't be
+   picked twice, per the panel's requirement. Removing a section (or
+   switching its type away) frees its type back up for the others. */
+function availableTypesFor(section) {
+  return Q_TYPES.filter((t) => t === section.type || !usedTypes.value.has(t))
+}
 
-function addEnumGroup() { enumGroups.value.push(makeEnumGroup()) }
-function removeEnumGroup(uid) { enumGroups.value = enumGroups.value.filter((g) => g.uid !== uid) }
+function addSection() {
+  const nextType = Q_TYPES.find((t) => !usedTypes.value.has(t))
+  if (!nextType) return
+  qbSections.value = [...qbSections.value, { uid: nextUid++, type: nextType, items: defaultItemsForType(nextType) }]
+}
+
+async function removeSection(uid) {
+  const ok = await showConfirm('Remove Test Section?', 'Remove this test section and all of its questions?')
+  if (!ok) return
+  qbSections.value = qbSections.value.filter((s) => s.uid !== uid)
+}
+
+/* Switching a section's type discards its current rows -- the fields
+   aren't compatible across types (choices vs. True/False vs.
+   alternatives vs. blanks) -- so this confirms first if anything was
+   actually typed in. */
+async function onSectionTypeChange(section, newType) {
+  if (newType === section.type) return
+  const hasContent = section.items.some((item) => itemHasContent(section.type, item))
+  if (hasContent) {
+    const ok = await showConfirm(
+      'Change Question Type?',
+      'Changing the question type will clear this section\'s current questions. Continue?',
+    )
+    if (!ok) return // the <select> is bound to section.type, so it snaps back on its own
+  }
+  section.type = newType
+  section.items = defaultItemsForType(newType)
+}
+
+function addItemToSection(section) {
+  section.items = [...section.items, ...defaultItemsForType(section.type)]
+}
+function removeItemFromSection(section, uid) {
+  section.items = section.items.filter((item) => item.uid !== uid)
+}
+
 function addEnumBlank(group) { group.blanks.push(makeEnumBlank()) }
 function removeEnumBlank(group, uid) {
   if (group.blanks.length <= 1) return
   group.blanks = group.blanks.filter((b) => b.uid !== uid)
 }
 
-/* Flattens the 4 grouped sections into one ordered array (MC, then True/False,
-   then Identification, then Enumeration) with freshly computed sequential
-   item_no. A row/group is kept if it has any typed content; nothing throws,
-   so saving an untouched legacy key behaves exactly as it did before. */
+/* Flattens qbSections, in the teacher's own section order, into one
+   array with freshly computed sequential item_no. A row/group is kept
+   if it has any typed content; nothing throws, so saving an untouched
+   legacy key behaves exactly as it did before. */
 function collectItems() {
   const items = []
 
-  mcItems.value.forEach((row) => {
-    const q = row.question_text.trim()
-    const choices = {
-      a: row.choices.a.trim(),
-      b: row.choices.b.trim(),
-      c: row.choices.c.trim(),
-      d: row.choices.d.trim(),
-    }
-    if (!q && !Object.values(choices).some((c) => c)) return
-    items.push({
-      item_no: items.length + 1,
-      type: 'Multiple Choice',
-      enum_group: null,
-      question_text: q,
-      choices,
-      correct_answer: row.correct,
-      alternatives: '',
-      points: parseFloat(row.points) || 1,
-      fuzzy_threshold: parseInt(row.threshold) || 85,
-    })
-  })
-
-  tfItems.value.forEach((row) => {
-    const q = row.question_text.trim()
-    if (!q) return
-    items.push({
-      item_no: items.length + 1,
-      type: 'True or False',
-      enum_group: null,
-      question_text: q,
-      choices: null,
-      correct_answer: row.correct,
-      alternatives: '',
-      points: parseFloat(row.points) || 1,
-      fuzzy_threshold: parseInt(row.threshold) || 85,
-    })
-  })
-
-  idItems.value.forEach((row) => {
-    const q = row.question_text.trim()
-    const correct = String(row.correct).trim()
-    if (!q && !correct) return
-    items.push({
-      item_no: items.length + 1,
-      type: 'Identification',
-      enum_group: null,
-      question_text: q,
-      choices: null,
-      correct_answer: correct,
-      alternatives: String(row.alternatives).trim(),
-      points: parseFloat(row.points) || 1,
-      fuzzy_threshold: parseInt(row.threshold) || 85,
-    })
-  })
-
-  let groupNo = 0
-  enumGroups.value.forEach((group) => {
-    const q = group.question_text.trim()
-    const blanks = group.blanks.filter((b) => String(b.correct).trim())
-    if (!q && !blanks.length) return
-    groupNo += 1
-    blanks.forEach((b) => {
-      items.push({
-        item_no: items.length + 1,
-        type: 'Enumeration',
-        enum_group: groupNo,
-        question_text: q,
-        choices: null,
-        correct_answer: String(b.correct).trim(),
-        alternatives: '',
-        points: parseFloat(b.points) || 1,
-        fuzzy_threshold: parseInt(b.threshold) || 85,
+  qbSections.value.forEach((section) => {
+    if (section.type === 'Multiple Choice') {
+      section.items.forEach((row) => {
+        const q = row.question_text.trim()
+        const choices = {
+          a: row.choices.a.trim(),
+          b: row.choices.b.trim(),
+          c: row.choices.c.trim(),
+          d: row.choices.d.trim(),
+        }
+        if (!q && !Object.values(choices).some((c) => c)) return
+        items.push({
+          item_no: items.length + 1,
+          type: 'Multiple Choice',
+          enum_group: null,
+          question_text: q,
+          choices,
+          correct_answer: [...row.correct].sort().join(','),
+          alternatives: '',
+          points: parseFloat(row.points) || 1,
+          fuzzy_threshold: parseInt(row.threshold) || 85,
+        })
       })
-    })
+    } else if (section.type === 'True or False') {
+      section.items.forEach((row) => {
+        const q = row.question_text.trim()
+        if (!q) return
+        items.push({
+          item_no: items.length + 1,
+          type: 'True or False',
+          enum_group: null,
+          question_text: q,
+          choices: null,
+          correct_answer: row.correct,
+          alternatives: '',
+          points: parseFloat(row.points) || 1,
+          fuzzy_threshold: parseInt(row.threshold) || 85,
+        })
+      })
+    } else if (section.type === 'Identification') {
+      section.items.forEach((row) => {
+        const q = row.question_text.trim()
+        const correct = String(row.correct).trim()
+        if (!q && !correct) return
+        items.push({
+          item_no: items.length + 1,
+          type: 'Identification',
+          enum_group: null,
+          question_text: q,
+          choices: null,
+          correct_answer: correct,
+          alternatives: String(row.alternatives).trim(),
+          points: parseFloat(row.points) || 1,
+          fuzzy_threshold: parseInt(row.threshold) || 85,
+        })
+      })
+    } else if (section.type === 'Enumeration') {
+      let groupNo = 0
+      section.items.forEach((group) => {
+        const q = group.question_text.trim()
+        const blanks = group.blanks.filter((b) => String(b.correct).trim())
+        if (!q && !blanks.length) return
+        groupNo += 1
+        blanks.forEach((b) => {
+          items.push({
+            item_no: items.length + 1,
+            type: 'Enumeration',
+            enum_group: groupNo,
+            question_text: q,
+            choices: null,
+            correct_answer: String(b.correct).trim(),
+            alternatives: '',
+            points: parseFloat(b.points) || 1,
+            fuzzy_threshold: parseInt(b.threshold) || 85,
+          })
+        })
+      })
+    }
   })
 
-  items.push(...otherItems.value)
+  // Renumbered here too, same as every branch above -- otherItems still
+  // carries whatever item_no it had when loaded from the server, and
+  // leaving that as-is let it collide with the freshly-assigned 1..N
+  // numbers above (answer_key_item has a UNIQUE (answer_key_id, item_no)
+  // constraint, so a collision failed the whole save with a raw 500
+  // instead of a clean error, since nothing here or in the backend
+  // catches that specific database error).
+  otherItems.value.forEach((item) => {
+    items.push({ ...item, item_no: items.length + 1 })
+  })
   return items
 }
 
@@ -352,10 +468,7 @@ async function deleteAnswerKey() {
   }
   currentKeyId.value = null
   keyName.value = ''
-  mcItems.value = []
-  tfItems.value = []
-  idItems.value = []
-  enumGroups.value = []
+  qbSections.value = []
   otherItems.value = []
   savedSnapshot.value = snapshot() // the emptied form is not "unsaved work"
   await reload()
@@ -370,12 +483,6 @@ const hasKeys = computed(() => keys.value.length > 0)
    template in SettingsView.vue but with real question content.
    -------------------------------------------------------- */
 
-function escapeHtml(str) {
-  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]))
-}
-
 /* Shared by Preview/Print and Download as Word: collects the current
    draft's items (even if unsaved) and confirms proceeding if some are
    incomplete. Returns null if there's nothing to export or the
@@ -388,7 +495,8 @@ async function getExportableItems(actionLabel) {
   }
   const missing = items.filter((i) =>
     !i.question_text.trim() ||
-    (i.type === 'Multiple Choice' && Object.values(i.choices).some((c) => !c.trim())),
+    (i.type === 'Multiple Choice' && Object.values(i.choices).some((c) => !c.trim())) ||
+    (i.type === 'Multiple Choice' && !i.correct_answer),
   )
   if (missing.length) {
     const proceed = await showConfirm(
@@ -416,8 +524,18 @@ async function previewQuestionnaire() {
   }
 
   preview.document.open()
-  preview.document.write(questionnaireHtml(items))
+  preview.document.write(questionnaireHtml(keyName.value.trim() || 'Untitled Answer Key', items))
   preview.document.close()
+
+  // #flow (written above) is the real, unbroken document -- exactly what
+  // @media print's page-break rules lay out correctly when actually
+  // printing/saving as PDF, left completely untouched. This splits that
+  // same content into #pages, a separate on-screen-only copy sliced into
+  // fixed-size boxes that look like actual sheets, since CSS page-break
+  // rules only take visual effect during real print layout, never in a
+  // plain scrolling window -- there's no on-screen "paged" mode in
+  // standard CSS to lean on instead.
+  paginatePreview(preview.document)
 }
 
 async function downloadQuestionnaireWord() {
@@ -436,145 +554,6 @@ async function downloadQuestionnaireWord() {
   anchor.click()
   anchor.remove()
   setTimeout(() => URL.revokeObjectURL(url), 0)
-}
-
-/* Instruction line printed under each section heading. The underline
-   blank before every question number is kept regardless (see .blank
-   below): that's what the YOLO detector is trained to find on a
-   printed/scanned sheet, so it can't be dropped for a cosmetic pass. */
-const SECTION_META = {
-  'Multiple Choice': {
-    instruction: 'Write the correct answer in the space provided.',
-  },
-  'True or False': {
-    instruction: 'Write <strong>TRUE</strong> if the statement is correct, and <strong>FALSE</strong> if the statement is wrong.',
-  },
-  Identification: {
-    instruction: 'Write the correct answer in the space provided.',
-  },
-  Enumeration: {
-    instruction: 'Enumerate the answers needed for each number.',
-  },
-}
-
-function questionnaireHtml(items) {
-  const title = escapeHtml(keyName.value.trim() || 'Untitled Answer Key')
-
-  const sections = [
-    { label: 'I', name: 'Multiple Choice', items: items.filter((i) => i.type === 'Multiple Choice') },
-    { label: 'II', name: 'True or False', items: items.filter((i) => i.type === 'True or False') },
-    { label: 'III', name: 'Identification', items: items.filter((i) => i.type === 'Identification') },
-    { label: 'IV', name: 'Enumeration', items: items.filter((i) => i.type === 'Enumeration') },
-  ].filter((section) => section.items.length)
-
-  let sectionsHtml = ''
-  sections.forEach((section) => {
-    const meta = SECTION_META[section.name]
-    sectionsHtml += `<div class="section">
-      <div class="section-title">${section.label}. ${escapeHtml(section.name)}</div>
-      <div class="section-instruction">${meta.instruction}</div>`
-
-    if (section.name === 'Enumeration') {
-      // Numbering restarts per section for display only, independent of the
-      // items' internal global item_no used for grading position-matching.
-      const groups = new Map()
-      section.items.forEach((item) => {
-        if (!groups.has(item.enum_group)) groups.set(item.enum_group, [])
-        groups.get(item.enum_group).push(item)
-      })
-      let groupNo = 0
-      for (const groupItems of groups.values()) {
-        groupNo += 1
-        // Wrapped in one block so a page break never lands between the
-        // prompt and its blanks, or between two of that group's blanks.
-        sectionsHtml += `<div class="block"><div class="q-prompt">${groupNo}. ${escapeHtml(groupItems[0].question_text)}</div><div class="enum-blanks">`
-        groupItems.forEach(() => {
-          sectionsHtml += `<div class="blank-line">- <span class="blank"></span></div>`
-        })
-        sectionsHtml += `</div></div>`
-      }
-    } else {
-      section.items.forEach((item, idx) => {
-        // Wrapped in one block so a page break never separates a question
-        // from its own choices.
-        sectionsHtml += `<div class="block"><div class="q-line"><span class="blank"></span>${idx + 1}. ${escapeHtml(item.question_text)}</div>`
-        if (section.name === 'Multiple Choice') {
-          sectionsHtml += `<div class="choices">`
-            + `<span>a. ${escapeHtml(item.choices.a)}</span>`
-            + `<span>b. ${escapeHtml(item.choices.b)}</span>`
-            + `<span>c. ${escapeHtml(item.choices.c)}</span>`
-            + `<span>d. ${escapeHtml(item.choices.d)}</span>`
-            + `</div>`
-        }
-        sectionsHtml += `</div>`
-      })
-    }
-
-    sectionsHtml += `</div>`
-  })
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title}</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      max-width: 820px; margin: 28px auto; padding: 0 24px;
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
-      color: #1f2937; line-height: 1.5;
-    }
-    .fields {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px;
-      margin: 12px 0 24px;
-    }
-    .field-row { display: flex; align-items: flex-end; gap: 8px; white-space: nowrap; font-size: 13px; color: #4b5563; }
-    .line { flex: 1; min-height: 1px; margin-bottom: 2px; border-bottom: 1px solid #111827; }
-    .section { margin-top: 22px; }
-    .section-title {
-      font-weight: 700; font-size: 14px; margin-bottom: 3px; color: #000;
-      break-after: avoid; page-break-after: avoid;
-    }
-    .section-instruction {
-      font-size: 12.5px; color: #374151; margin-bottom: 10px;
-      break-after: avoid; page-break-after: avoid;
-    }
-    /* Keeps a question and its own choices/blanks together -- without
-       this a page break can land between a question and its answer
-       lines, splitting one item across two sheets. */
-    .block { break-inside: avoid; page-break-inside: avoid; }
-    .q-line, .q-prompt { margin: 10px 0 4px; }
-    .blank { display: inline-block; min-width: 60px; border-bottom: 1px solid #111827; margin-right: 6px; }
-    .choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; margin: 2px 0 10px 66px; color: #4b5563; font-size: 13px; }
-    .enum-blanks { margin-left: 20px; }
-    .blank-line { margin: 6px 0; }
-    .print { margin: 0 0 18px; padding: 9px 16px; border: 0; border-radius: 6px; background: #1f6fb2; color: white; cursor: pointer; font-weight: 600; }
-    .print:hover { background: #185c96; }
-    /* The actual paper margin used when printing/saving as PDF -- distinct
-       from the body's padding above, which only affects the on-screen
-       preview's content box. Auto-pagination for overflowing content is
-       the browser's native print behavior; this just makes it 1" on
-       every sheet instead of whatever the browser/printer defaults to. */
-    @page { margin: 1in; }
-    @media print {
-      body { margin: 0; max-width: none; padding: 0; }
-      .print { display: none; }
-    }
-  </style>
-</head>
-<body>
-  <button class="print" onclick="window.print()">Print Questionnaire</button>
-  <div class="fields">
-    <div class="field-row">Name:<div class="line"></div></div>
-    <div class="field-row">Date:<div class="line"></div></div>
-    <div class="field-row">Section:<div class="line"></div></div>
-    <div class="field-row">Score:<div class="line"></div></div>
-  </div>
-  ${sectionsHtml}
-</body>
-</html>`
 }
 
 /* Splits "Write <strong>TRUE</strong> ... <strong>FALSE</strong> ..." into
@@ -608,12 +587,7 @@ function noBorder() {
 function buildQuestionnaireDocx(items) {
   const blank = (length) => '_'.repeat(length)
 
-  const sections = [
-    { label: 'I', name: 'Multiple Choice', items: items.filter((i) => i.type === 'Multiple Choice') },
-    { label: 'II', name: 'True or False', items: items.filter((i) => i.type === 'True or False') },
-    { label: 'III', name: 'Identification', items: items.filter((i) => i.type === 'Identification') },
-    { label: 'IV', name: 'Enumeration', items: items.filter((i) => i.type === 'Enumeration') },
-  ].filter((section) => section.items.length)
+  const sections = labeledSections(items)
 
   const children = [
     new Paragraph({
@@ -719,6 +693,10 @@ function buildQuestionnaireDocx(items) {
       }
     } else {
       section.items.forEach((item, idx) => {
+        // A "select all that apply" item (more than one correct letter --
+        // see collectItems()'s comma-joined correct_answer) gets a hint
+        // so the student knows to write more than one letter.
+        const isMultiAnswer = section.name === 'Multiple Choice' && item.correct_answer.includes(',')
         children.push(
           new Paragraph({
             // keepNext glues this question to its own choices table (for MC)
@@ -729,6 +707,9 @@ function buildQuestionnaireDocx(items) {
             children: [
               new TextRun({ text: `${blank(14)}  ` }),
               new TextRun({ text: `${idx + 1}. ${item.question_text}` }),
+              ...(isMultiAnswer
+                ? [new TextRun({ text: '  (Select all that apply)', italics: true, size: 20, color: '6b7280' })]
+                : []),
             ],
           }),
         )
@@ -816,157 +797,188 @@ onMounted(reload)
           >
         </div>
 
-        <!-- I. Multiple Choice -->
-        <div class="qb-section">
-          <div class="card-title">I. Multiple Choice</div>
-          <div v-for="(item, idx) in mcItems" :key="item.uid" class="mc-card">
-            <div class="mc-card-header">
-              <span class="qb-index">{{ idx + 1 }}.</span>
-              <input
-                v-model="item.question_text"
-                type="text"
-                placeholder="Question text"
-                title="Question text"
-              >
-              <button
-                class="btn btn-danger btn-small"
-                title="Remove this question."
-                @click="removeMcItem(item.uid)"
-              >
-                ✕
-              </button>
-            </div>
-            <div class="mc-choices">
-              <label v-for="letter in MC_LETTERS" :key="letter" class="mc-choice">
-                <input
-                  v-model="item.correct"
-                  type="radio"
-                  :name="'mc-correct-' + item.uid"
-                  :value="letter"
-                  title="Mark as the correct choice"
-                >
-                <span class="mc-choice-letter">{{ letter }}.</span>
-                <input
-                  v-model="item.choices[letter]"
-                  type="text"
-                  :placeholder="'Choice ' + letter.toUpperCase()"
-                  title="Choice text"
-                >
-              </label>
-            </div>
-            <div class="mc-meta">
-              <label>Points <input v-model.number="item.points" type="number" style="width:60px;" title="Points"></label>
-              <label>Threshold % <input v-model.number="item.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
-            </div>
-          </div>
-          <div v-if="!mcItems.length" class="muted-text mb-8">No multiple choice questions yet.</div>
-          <button class="btn btn-secondary" title="Add a multiple choice question." @click="addMcItem">
-            + Add Multiple Choice Question
-          </button>
-        </div>
-
-        <!-- II. True or False -->
-        <div class="qb-section">
-          <div class="card-title">II. True or False</div>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr><th>#</th><th>Statement</th><th>Correct</th><th>Points</th><th>Threshold</th><th></th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="(item, idx) in tfItems" :key="item.uid">
-                  <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
-                  <td><input v-model="item.question_text" type="text" title="Statement text"></td>
-                  <td>
-                    <select v-model="item.correct" title="Correct answer">
-                      <option value="True">True</option>
-                      <option value="False">False</option>
-                    </select>
-                  </td>
-                  <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
-                  <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
-                  <td>
-                    <button class="btn btn-danger btn-small" title="Remove this statement." @click="removeTfItem(item.uid)">✕</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-if="!tfItems.length" class="muted-text mb-8 mt-8">No true or false statements yet.</div>
-          <button class="btn btn-secondary mt-8" title="Add a true or false statement." @click="addTfItem">
-            + Add True or False Question
-          </button>
-        </div>
-
-        <!-- III. Identification -->
-        <div class="qb-section">
-          <div class="card-title">III. Identification</div>
-          <div class="table-wrapper">
-            <table>
-              <thead>
-                <tr><th>#</th><th>Question</th><th>Correct Answer</th><th>Alternative Answers</th><th>Points</th><th>Threshold</th><th></th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="(item, idx) in idItems" :key="item.uid">
-                  <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
-                  <td><input v-model="item.question_text" type="text" title="Question text"></td>
-                  <td><input v-model="item.correct" type="text" title="Correct answer"></td>
-                  <td><input v-model="item.alternatives" type="text" title="Alternative answers"></td>
-                  <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
-                  <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
-                  <td>
-                    <button class="btn btn-danger btn-small" title="Remove this question." @click="removeIdItem(item.uid)">✕</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-if="!idItems.length" class="muted-text mb-8 mt-8">No identification questions yet.</div>
-          <button class="btn btn-secondary mt-8" title="Add an identification question." @click="addIdItem">
-            + Add Identification Question
-          </button>
-        </div>
-
-        <!-- IV. Enumeration -->
-        <div class="qb-section">
-          <div class="card-title">IV. Enumeration</div>
-          <div v-for="(group, idx) in enumGroups" :key="group.uid" class="enum-group">
-            <div class="enum-group-header">
-              <span class="qb-index">{{ idx + 1 }}.</span>
-              <input
-                v-model="group.question_text"
-                type="text"
-                placeholder="Enumeration prompt (e.g. Enumerate 4 examples of...)"
-                title="Enumeration prompt"
-              >
-              <button
-                class="btn btn-danger btn-small"
-                title="Remove this enumeration question."
-                @click="removeEnumGroup(group.uid)"
-              >
-                ✕
-              </button>
-            </div>
-            <div v-for="blank in group.blanks" :key="blank.uid" class="enum-blank-row">
-              <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer">
-              <label>Points <input v-model.number="blank.points" type="number" style="width:60px;" title="Points"></label>
-              <label>Threshold % <input v-model.number="blank.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
-              <button
-                class="btn btn-danger btn-small"
-                title="Remove this answer."
-                :disabled="group.blanks.length <= 1"
-                @click="removeEnumBlank(group, blank.uid)"
-              >
-                ✕
-              </button>
-            </div>
-            <button class="btn btn-secondary btn-small" title="Add another accepted answer." @click="addEnumBlank(group)">
-              + Add Answer
+        <!-- Test sections -- each one picks its own question type, in the
+             order the teacher builds them (see qbSections in the script). -->
+        <div v-for="(section, sIdx) in qbSections" :key="section.uid" class="qb-section">
+          <div class="qb-section-header">
+            <span class="qb-index">{{ ROMAN[sIdx] || sIdx + 1 }}.</span>
+            <select
+              :value="section.type"
+              title="Choose this test section's question type."
+              @change="onSectionTypeChange(section, $event.target.value)"
+            >
+              <option v-for="t in availableTypesFor(section)" :key="t" :value="t">{{ t }}</option>
+            </select>
+            <button
+              class="btn btn-danger btn-small"
+              title="Remove this test section and all of its questions."
+              @click="removeSection(section.uid)"
+            >
+              Remove Test Section
             </button>
           </div>
-          <div v-if="!enumGroups.length" class="muted-text mb-8">No enumeration questions yet.</div>
-          <button class="btn btn-secondary" title="Add an enumeration question." @click="addEnumGroup">
-            + Add Enumeration Question
+
+          <!-- Multiple Choice -->
+          <template v-if="section.type === 'Multiple Choice'">
+            <div v-for="(item, idx) in section.items" :key="item.uid" class="mc-card">
+              <div class="mc-card-header">
+                <span class="qb-index">{{ idx + 1 }}.</span>
+                <input
+                  v-model="item.question_text"
+                  type="text"
+                  placeholder="Question text"
+                  title="Question text"
+                >
+                <button
+                  class="btn btn-danger btn-small"
+                  title="Remove this question."
+                  aria-label="Remove this question"
+                  @click="removeItemFromSection(section, item.uid)"
+                >
+                  ✕
+                </button>
+              </div>
+              <div class="mc-choices">
+                <label v-for="letter in MC_LETTERS" :key="letter" class="mc-choice">
+                  <input
+                    v-model="item.correct"
+                    type="checkbox"
+                    :value="letter"
+                    title="Mark as (one of) the correct choice(s) -- check more than one for a select-all-that-apply question."
+                  >
+                  <span class="mc-choice-letter">{{ letter }}.</span>
+                  <input
+                    v-model="item.choices[letter]"
+                    type="text"
+                    :placeholder="'Choice ' + letter.toUpperCase()"
+                    title="Choice text"
+                  >
+                </label>
+              </div>
+              <div class="mc-meta">
+                <label>Points <input v-model.number="item.points" type="number" style="width:60px;" title="Points"></label>
+                <label>Threshold % <input v-model.number="item.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
+              </div>
+            </div>
+            <div v-if="!section.items.length" class="muted-text mb-8">No multiple choice questions yet.</div>
+            <button class="btn btn-secondary" title="Add a multiple choice question." @click="addItemToSection(section)">
+              + Add Multiple Choice Question
+            </button>
+          </template>
+
+          <!-- True or False -->
+          <template v-else-if="section.type === 'True or False'">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr><th>#</th><th>Statement</th><th>Correct</th><th>Points</th><th>Threshold</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, idx) in section.items" :key="item.uid">
+                    <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
+                    <td><input v-model="item.question_text" type="text" title="Statement text"></td>
+                    <td>
+                      <select v-model="item.correct" title="Correct answer">
+                        <option value="True">True</option>
+                        <option value="False">False</option>
+                      </select>
+                    </td>
+                    <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
+                    <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
+                    <td>
+                      <button class="btn btn-danger btn-small" title="Remove this statement." aria-label="Remove this statement" @click="removeItemFromSection(section, item.uid)">✕</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="!section.items.length" class="muted-text mb-8 mt-8">No true or false statements yet.</div>
+            <button class="btn btn-secondary mt-8" title="Add a true or false statement." @click="addItemToSection(section)">
+              + Add True or False Question
+            </button>
+          </template>
+
+          <!-- Identification -->
+          <template v-else-if="section.type === 'Identification'">
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr><th>#</th><th>Question</th><th>Correct Answer</th><th>Alternative Answers</th><th>Points</th><th>Threshold</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, idx) in section.items" :key="item.uid">
+                    <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
+                    <td><input v-model="item.question_text" type="text" title="Question text"></td>
+                    <td><input v-model="item.correct" type="text" title="Correct answer"></td>
+                    <td><input v-model="item.alternatives" type="text" title="Alternative answers"></td>
+                    <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
+                    <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
+                    <td>
+                      <button class="btn btn-danger btn-small" title="Remove this question." aria-label="Remove this question" @click="removeItemFromSection(section, item.uid)">✕</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="!section.items.length" class="muted-text mb-8 mt-8">No identification questions yet.</div>
+            <button class="btn btn-secondary mt-8" title="Add an identification question." @click="addItemToSection(section)">
+              + Add Identification Question
+            </button>
+          </template>
+
+          <!-- Enumeration -->
+          <template v-else-if="section.type === 'Enumeration'">
+            <div v-for="(group, idx) in section.items" :key="group.uid" class="enum-group">
+              <div class="enum-group-header">
+                <span class="qb-index">{{ idx + 1 }}.</span>
+                <input
+                  v-model="group.question_text"
+                  type="text"
+                  placeholder="Enumeration prompt (e.g. Enumerate 4 examples of...)"
+                  title="Enumeration prompt"
+                >
+                <button
+                  class="btn btn-danger btn-small"
+                  title="Remove this enumeration question."
+                  aria-label="Remove this enumeration question"
+                  @click="removeItemFromSection(section, group.uid)"
+                >
+                  ✕
+                </button>
+              </div>
+              <div v-for="blank in group.blanks" :key="blank.uid" class="enum-blank-row">
+                <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer">
+                <label>Points <input v-model.number="blank.points" type="number" style="width:60px;" title="Points"></label>
+                <label>Threshold % <input v-model.number="blank.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
+                <button
+                  class="btn btn-danger btn-small"
+                  title="Remove this answer."
+                  aria-label="Remove this answer"
+                  :disabled="group.blanks.length <= 1"
+                  @click="removeEnumBlank(group, blank.uid)"
+                >
+                  ✕
+                </button>
+              </div>
+              <button class="btn btn-secondary btn-small" title="Add another accepted answer." @click="addEnumBlank(group)">
+                + Add Answer
+              </button>
+            </div>
+            <div v-if="!section.items.length" class="muted-text mb-8">No enumeration questions yet.</div>
+            <button class="btn btn-secondary" title="Add an enumeration question." @click="addItemToSection(section)">
+              + Add Enumeration Question
+            </button>
+          </template>
+        </div>
+
+        <div class="qb-add-section">
+          <button
+            class="btn btn-secondary"
+            :disabled="!canAddSection"
+            :title="canAddSection ? 'Add another test section with a different question type.' : 'All four question types are already in use.'"
+            @click="addSection"
+          >
+            + Add Test Section
           </button>
         </div>
 

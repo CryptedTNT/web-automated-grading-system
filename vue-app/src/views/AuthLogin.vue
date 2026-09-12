@@ -22,6 +22,7 @@ const STATUS_MESSAGES = {
   created: 'Account created. Log in to continue.',
   reset: 'Password reset. Log in using your new password.',
   loggedout: 'Logged out.',
+  expired: 'Your session ended (logged out elsewhere, or it expired). Please sign in again.',
 }
 
 const username = ref(route.query.u || '')
@@ -50,7 +51,20 @@ async function submit() {
     return
   }
 
-  const user = await API.verifyUser(username.value.trim(), password.value)
+  let user
+  try {
+    user = await API.verifyUser(username.value.trim(), password.value)
+  } catch (e) {
+    if (e.retryAfterSeconds) {
+      const minutes = Math.ceil(e.retryAfterSeconds / 60)
+      await showMessage(
+        'Too Many Attempts',
+        `Too many failed login attempts for this account. Try again in about ${minutes} minute(s).`,
+      )
+      return
+    }
+    throw e
+  }
   if (!user) {
     /* The backend doesn't say which of the two was wrong (and no
        longer exposes a public by-username lookup to infer it from),
@@ -83,7 +97,7 @@ function clearInvalid(field) {
     <HeroPanel />
 
     <div class="auth-card">
-      <div class="page-title">Welcome back, Teacher!</div>
+      <h1 class="page-title">Welcome back, Teacher!</h1>
       <div class="muted-text">Please sign in to continue.</div>
 
       <div class="form-group">
@@ -93,6 +107,7 @@ function clearInvalid(field) {
           type="text"
           placeholder="Enter your username"
           title="Enter your local teacher account username."
+          aria-label="Username"
           :class="{ invalid: invalidUsername }"
           @input="clearInvalid('username')"
           @keydown.enter="passwordInput?.focus()"
@@ -151,6 +166,11 @@ function clearInvalid(field) {
 
       <div class="spacer"></div>
       <div class="muted-text text-center">© 2027 AGS. Web-based application.</div>
+      <div class="muted-text text-center mt-8">
+        <RouterLink :to="{ name: 'terms' }">Terms</RouterLink> ·
+        <RouterLink :to="{ name: 'privacy' }">Privacy</RouterLink> ·
+        <RouterLink :to="{ name: 'cookies' }">Cookies</RouterLink>
+      </div>
     </div>
   </div>
 </template>

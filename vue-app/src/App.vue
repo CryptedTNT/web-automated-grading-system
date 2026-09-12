@@ -25,7 +25,7 @@ const NAV_ITEMS = [
   { name: 'dashboard', icon: '▦', label: 'Dashboard', title: 'View overall grading statistics and recent system activity.' },
   { name: 'answer_key', icon: '▣', label: 'Answer Keys', title: 'Create, edit, save, and delete answer keys.' },
   { name: 'upload', icon: '⇧', label: 'Upload Sheets', title: 'Upload scanned or captured answer sheet images.' },
-  { name: 'processing', icon: '⚙', label: 'Processing', title: 'Start placeholder processing and create model-ready records.' },
+  { name: 'processing', icon: '⚙', label: 'Processing', title: 'Run automated grading (YOLO detection + TrOCR recognition) on the upload queue.' },
   { name: 'results', icon: '☑', label: 'Results', title: 'View grading session summaries and student scores.' },
   { name: 'student_result', icon: '◫', label: 'Student Result', title: 'View item-level results for a selected student.' },
   { name: 'review', icon: '⚑', label: 'Review Flagged', title: 'Manually check flagged answers that need teacher review.' },
@@ -90,9 +90,9 @@ async function logout() {
 <template>
   <div id="app-root">
     <!-- Auth screens: no sidebar, no top bar -->
-    <div v-if="isAuthScreen" class="auth-view active">
+    <main v-if="isAuthScreen" class="auth-view active">
       <RouterView />
-    </div>
+    </main>
 
     <!-- Application shell -->
     <div v-else id="shell" class="active">
@@ -157,6 +157,7 @@ async function logout() {
             class="top-search"
             placeholder="Search student, section, answer key..."
             title="Search grading results by student name, section, or answer key."
+            aria-label="Search grading results by student name, section, or answer key"
           >
           <span class="top-teacher">{{ store.teacherLabel }}</span>
         </div>

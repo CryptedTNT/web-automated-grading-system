@@ -19,6 +19,12 @@ export const useAppStore = defineStore('app', {
        the derived fields Processing reads: key, name, size, type,
        lastModified, relativePath, source. */
     uploadFiles: [],
+    /* The teacher's attestation, on the Upload page, that paper consent
+       (SettingsView.vue's downloadable consent form) was already
+       collected for every student in the current queue -- this is what
+       student_info.consent_status actually records per upload, so it
+       resets with every new queue rather than persisting silently. */
+    consentConfirmed: false,
     currentSessionId: null,
     selectedStudentResultId: null,
     selectedFlaggedItemId: null,
@@ -43,6 +49,7 @@ export const useAppStore = defineStore('app', {
      */
     async clearRuntimeSelection() {
       this.uploadFiles = []
+      this.consentConfirmed = false
       this.currentSessionId = await API.latestSessionId()
       this.selectedStudentResultId = null
       this.selectedFlaggedItemId = null

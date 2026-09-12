@@ -15,7 +15,7 @@ import decimal
 
 from sqlalchemy import JSON, DateTime, Numeric, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-
+    
 from app.db import Base
 
 
@@ -73,7 +73,11 @@ class AnswerKeyItem(Base):
     question_type: Mapped[str] = mapped_column(String(20))  # MC|TF|IDENTIFICATION|ENUMERATION
     enum_group: Mapped[int | None]
     question_text: Mapped[str | None] = mapped_column(Text)
-    choices: Mapped[dict | None] = mapped_column(JSON)  # {"a":"...","b":"...","c":"...","d":"..."}
+    # none_as_null=True: SQLAlchemy's JSON type otherwise stores a Python
+    # None as the JSON literal `null`, not a real SQL NULL -- which fails
+    # V004's chk_item_choices (choices IS NULL OR question_type = 'MC')
+    # for every non-MC item, since a JSON `null` value isn't SQL NULL.
+    choices: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))  # {"a":"...","b":"...","c":"...","d":"..."}
     correct_answer: Mapped[str] = mapped_column(Text)
     alternative_answers: Mapped[str | None] = mapped_column(Text)
     fuzzy_threshold: Mapped[decimal.Decimal | None] = mapped_column(Numeric(5, 2))
@@ -96,17 +100,38 @@ class GradingSession(Base):
 
 
 class ExamSheet(Base):
+    """One row per student submission -- which may span several physical
+    page images (see ExamSheetPage, added in V006). sheet_id is the
+    aggregation point student_info/student_answer/grading_result already
+    keyed off before V006; it simply used to mean "one image" and now
+    means "one group of pages" instead."""
+
     __tablename__ = "exam_sheet"
 
     sheet_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     session_id: Mapped[int]
     answer_key_id: Mapped[int]
     sheet_code: Mapped[str] = mapped_column(String(50), unique=True)
+    upload_date: Mapped[datetime.datetime] = mapped_column(DateTime)
+
+
+class ExamSheetPage(Base):
+    """One row per physical page image within a submission. page_no is
+    1-based in upload/capture order -- only page 1 is expected to carry
+    a recognisable Name/Section header; see app/inference/pipeline.py's
+    run_sheet_group for how pages are pooled for grading without needing
+    to know which items live on which page."""
+
+    __tablename__ = "exam_sheet_page"
+
+    page_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sheet_id: Mapped[int]
+    page_no: Mapped[int] = mapped_column(SmallInteger)
     original_filename: Mapped[str | None] = mapped_column(String(255))
     image_path: Mapped[str] = mapped_column(String(255))
-    upload_date: Mapped[datetime.datetime] = mapped_column(DateTime)
     processing_status: Mapped[str] = mapped_column(String(20))
     error_message: Mapped[str | None] = mapped_column(String(255))
+    uploaded_at: Mapped[datetime.datetime] = mapped_column(DateTime)
 
 
 class StudentInfo(Base):

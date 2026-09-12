@@ -131,7 +131,7 @@ async function submit() {
     <HeroPanel />
 
     <div class="auth-card">
-      <div class="page-title">Reset Password</div>
+      <h1 class="page-title">Reset Password</h1>
       <div class="muted-text">{{ status }}</div>
 
       <div class="form-group">
@@ -141,6 +141,7 @@ async function submit() {
           type="text"
           placeholder="Username"
           title="Enter the username of the local teacher account."
+          aria-label="Username"
           :disabled="codeSent"
           :class="{ invalid: isInvalid('username') }"
           @input="clearInvalid('username')"
@@ -163,6 +164,7 @@ async function submit() {
             maxlength="6"
             placeholder="6-digit code"
             title="Enter the 6-digit code sent to your email."
+            aria-label="6-digit verification code"
             :class="{ invalid: isInvalid('code') }"
             @input="clearInvalid('code')"
           >

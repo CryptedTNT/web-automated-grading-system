@@ -7,6 +7,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
+import { formatDateTime } from '@/services/datetime.js'
 
 const store = useAppStore()
 
@@ -96,7 +97,7 @@ const QUICK_ACTIONS = [
             </thead>
             <tbody>
               <tr v-for="session in recentSessions" :key="session.id">
-                <td>{{ session.created_at }}</td>
+                <td>{{ formatDateTime(session.created_at) }}</td>
                 <td>{{ session.answer_key_name || 'No key' }}</td>
                 <td>{{ session.sheets }}</td>
                 <td>{{ session.average }}%</td>
