@@ -23,6 +23,11 @@ const routes = [
   // but rendered bare like the auth screens — see App.vue's isAuthScreen.
   { path: '/verify-email', name: 'verify_email', component: () => import('@/views/VerifyEmailView.vue'), meta: { bare: true } },
 
+  // --- Legal pages -- readable with or without an account, so `public` ---
+  { path: '/privacy', name: 'privacy', component: () => import('@/views/PrivacyPolicyView.vue'), meta: { public: true } },
+  { path: '/terms', name: 'terms', component: () => import('@/views/TermsView.vue'), meta: { public: true } },
+  { path: '/cookies', name: 'cookies', component: () => import('@/views/CookiePolicyView.vue'), meta: { public: true } },
+
   // --- Application pages (rendered inside the shell) ---
   { path: '/dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: 'Dashboard' } },
   { path: '/answer-key', name: 'answer_key', component: () => import('@/views/AnswerKeyView.vue'), meta: { title: 'Answer Keys' } },

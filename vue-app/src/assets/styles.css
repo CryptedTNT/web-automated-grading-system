@@ -30,7 +30,11 @@
 
   --text-primary: #1F2933;
   --text-heading: #102A43;
-  --text-muted: #60758A;
+  /* #60758A measured ~4.47:1 against --page-bg (#F5F8FC) -- just under
+     WCAG AA's 4.5:1 for normal text (axe-core caught this on the pages
+     that render muted text directly on the page background rather than
+     inside a white .card). Darkened slightly to clear that everywhere. */
+  --text-muted: #566A7D;
 
   --input-border: #C8D4E2;
   --input-focus: #1F6FB2;
@@ -75,8 +79,13 @@ html, body {
   overflow: hidden;
 }
 
-a { color: var(--primary); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* Underlined by default, not just colored -- a link distinguished by
+   color alone fails WCAG 1.4.1 for anyone who can't perceive that color
+   difference (colorblindness, some display/print conditions). Every
+   bare <a> in this app sits inside body text (RouterLinks used as nav
+   buttons render a real <button>, not an <a>, via custom/v-slot). */
+a { color: var(--primary); text-decoration: underline; }
+a:hover { color: var(--primary-hover); }
 
 /* ---------- App Shell ---------- */
 #app-root {
@@ -260,7 +269,10 @@ a:hover { text-decoration: underline; }
 }
 
 /* ---------- Typography ---------- */
-.page-title { font-size: 23px; font-weight: 800; color: var(--text-heading); }
+/* margin: 0 neutralizes the browser's default <h1> margin now that
+   page-title is a real heading (was a <div>) -- see App.vue's
+   landmark-one-main fix and the h1 changes across the view files. */
+.page-title { font-size: 23px; font-weight: 800; color: var(--text-heading); margin: 0; }
 .page-subtitle { color: var(--text-muted); font-size: 12px; margin-top: 3px; }
 .section-title { font-size: 16px; font-weight: 800; color: var(--text-heading); }
 .muted-text { color: var(--text-muted); font-size: 12px; }
@@ -600,6 +612,7 @@ table input, table select {
 .mb-8 { margin-bottom: 8px; }
 .mb-14 { margin-bottom: 14px; }
 .ml-auto { margin-left: auto; }
+.ml-8 { margin-left: 8px; }
 .w-full { width: 100%; }
 
 /* ---------- Radio Group ---------- */
@@ -776,6 +789,14 @@ table input, table select {
   gap: 8px;
   margin-bottom: 10px;
 }
+.qb-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.qb-section-header select { max-width: 240px; }
+.qb-add-section { margin-top: 18px; }
 .qb-index { font-weight: 700; min-width: 20px; }
 .mc-choices {
   display: grid;
@@ -893,6 +914,80 @@ table input, table select {
 .upload-file-size { color: var(--text-muted); text-align: right; }
 .file-empty { padding: 28px 16px; text-align: center; color: var(--text-muted); }
 
+/* ---------- Legal pages (Privacy/Terms/Cookies) ---------- */
+.legal-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 40px 24px 60px;
+  line-height: 1.6;
+}
+.legal-page h2 { font-size: 15px; font-weight: 800; color: var(--text-heading); margin: 24px 0 8px; }
+.legal-page h2:first-of-type { margin-top: 0; }
+.legal-page p, .legal-page li { color: var(--text-primary); font-size: 13.5px; }
+.legal-page ul { margin: 6px 0 6px 20px; padding: 0; }
+.legal-page li { margin-bottom: 4px; }
+.legal-page .legal-updated { color: var(--text-muted); font-size: 12px; margin-bottom: 20px; }
+.legal-page .legal-notice {
+  background: #FFF4D6; color: #9A6500; border-radius: var(--radius-sm);
+  padding: 12px 14px; font-size: 12.5px; margin-bottom: 24px; line-height: 1.5;
+}
+.legal-page .legal-back { display: inline-block; margin-top: 28px; }
+
+/* ---------- Submission Groups (Upload page's Review Submissions) ---------- */
+.submission-groups { max-height: 420px; overflow-y: auto; display: grid; gap: 10px; }
+.submission-card {
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.submission-card.submission-mismatch { border-color: var(--warning, #d97706); }
+.submission-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 8px;
+}
+.submission-pages { display: grid; gap: 6px; }
+.submission-page {
+  display: grid;
+  grid-template-columns: 48px 88px minmax(0, 1fr) 78px auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid #F6F9FC;
+}
+.submission-page:first-child { border-top: none; }
+.submission-page-no { color: var(--text-muted); font-size: 12px; }
+.submission-page-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.submission-move-select { min-height: 32px; font-size: 12px; padding: 4px 6px; }
+
+/* Thumbnail for a page still sitting locally in the browser (not yet
+   uploaded) -- click opens it larger in .preview-box. Used both in the
+   Review Submissions list and next to "Retake Last Page" in Capture Live. */
+.submission-thumb {
+  width: 48px; height: 48px; object-fit: cover;
+  border-radius: var(--radius-sm); border: 1px solid var(--border, #E2E8F0);
+  cursor: zoom-in; background: #F6F9FC;
+}
+
+/* ---------- Capture Live modal ---------- */
+.camera-box { min-width: 320px; max-width: 560px; width: 100%; }
+.camera-preview {
+  width: 100%; background: #000; border-radius: var(--radius-sm);
+  overflow: hidden; aspect-ratio: 4 / 3;
+}
+.camera-preview video { width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------- Image preview modal ---------- */
+.preview-box { min-width: 280px; max-width: 720px; width: 100%; }
+.preview-image {
+  display: block; width: 100%; max-height: 70vh;
+  object-fit: contain; border-radius: var(--radius-sm); background: #000;
+}
+
+@media (max-width: 720px) {
+  .submission-page { display: flex; flex-wrap: wrap; align-items: center; }
+  .submission-page-name { flex: 1 1 100%; }
+}
+
 .processing-banner {
   display: flex;
   align-items: center;
@@ -1001,6 +1096,7 @@ table input, table select {
   overflow-wrap: anywhere;
 }
 .reports-table-wrapper { max-height: 430px; overflow-y: auto; }
+.table-actions { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
 .student-result-table { max-height: 520px; overflow-y: auto; }
 .remarks-cell { max-width: 240px; white-space: normal; overflow-wrap: anywhere; }
 .empty-state { min-height: 220px; display: grid; place-items: center; align-content: center; gap: 16px; text-align: center; }

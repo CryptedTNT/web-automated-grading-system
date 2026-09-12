@@ -8,6 +8,7 @@ import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -92,8 +93,22 @@ def update_answer_key(
 @router.delete("/{key_id}", status_code=204)
 def delete_answer_key(key_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
     key = _owned_key(key_id, faculty, db)
-    db.delete(key)  # items cascade, per fk_item_answerkey ON DELETE CASCADE
-    db.commit()
+    # Deleting the key cascades to its items (fk_item_answerkey ON DELETE
+    # CASCADE) -- but those items are RESTRICT-protected by fk_answer_item
+    # / fk_result_item (V002) the moment any sheet has been graded with
+    # this key, same underlying conflict as replace_items()'s DELETE
+    # above. The cascade fails partway with an IntegrityError there,
+    # which used to surface as a raw 500 here.
+    db.delete(key)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Could not delete: this answer key has graded sessions, and their results are tied "
+            "to its items. Delete the session(s) that used it first, then delete this key.",
+        )
 
 
 @router.get("/{key_id}/items")
@@ -113,24 +128,54 @@ def replace_items(
     db: Session = Depends(get_db),
 ):
     _owned_key(key_id, faculty, db)
+
+    # answer_key_item has a UNIQUE (answer_key_id, item_no) constraint --
+    # catching this here first gives a clean, specific message instead of
+    # letting it surface as a raw IntegrityError -> 500 from db.commit()
+    # below (which is exactly what happened before the frontend's own
+    # renumbering bug in AnswerKeyView.vue's collectItems() was fixed).
+    item_numbers = [item.item_no for item in body.items]
+    if len(set(item_numbers)) != len(item_numbers):
+        raise HTTPException(
+            status_code=400, detail="Two or more items share the same item number: each must be unique."
+        )
+
     # DELETE then bulk INSERT, staged in the session and committed together
     # as one transaction -- nothing hits the table until db.commit() below.
-    db.query(AnswerKeyItem).filter(AnswerKeyItem.answer_key_id == key_id).delete()
-    for item in body.items:
-        code = question_type_to_code(item.type)
-        db.add(
-            AnswerKeyItem(
-                answer_key_id=key_id,
-                item_no=item.item_no,
-                question_type=code,
-                enum_group=item.enum_group if code == "ENUMERATION" else None,
-                question_text=item.question_text or None,
-                choices=item.choices if code == "MC" else None,
-                correct_answer=item.correct_answer,
-                alternative_answers=item.alternatives or None,
-                fuzzy_threshold=item.fuzzy_threshold,
-                points=item.points,
+    #
+    # The DELETE itself (not just the later commit) can fail: fk_answer_item
+    # and fk_result_item (V002) are ON DELETE RESTRICT on purpose, so a
+    # student_answer/grading_result row can never lose track of which
+    # question it was actually scored against. That means once any sheet
+    # has been graded with this key, its current items can't be wholesale
+    # replaced anymore -- the DELETE below raises IntegrityError immediately,
+    # before db.commit() is ever reached, which is why an earlier version of
+    # this try/except (wrapping only db.commit()) never actually caught it.
+    try:
+        db.query(AnswerKeyItem).filter(AnswerKeyItem.answer_key_id == key_id).delete()
+        for item in body.items:
+            code = question_type_to_code(item.type)
+            db.add(
+                AnswerKeyItem(
+                    answer_key_id=key_id,
+                    item_no=item.item_no,
+                    question_type=code,
+                    enum_group=item.enum_group if code == "ENUMERATION" else None,
+                    question_text=item.question_text or None,
+                    choices=item.choices if code == "MC" else None,
+                    correct_answer=item.correct_answer,
+                    alternative_answers=item.alternatives or None,
+                    fuzzy_threshold=item.fuzzy_threshold,
+                    points=item.points,
+                )
             )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Could not save: this answer key already has graded sheets, and their results are "
+            "tied to its current items, so they can't be fully replaced. Delete the session(s) that used "
+            "this answer key first, or create a new answer key instead of editing this one.",
         )
-    db.commit()
     return {"ok": True}

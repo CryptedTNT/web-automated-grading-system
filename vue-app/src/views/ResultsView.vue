@@ -10,6 +10,7 @@ import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import { exportSessionToFile } from '@/services/export.js'
+import { formatDateTime } from '@/services/datetime.js'
 
 const router = useRouter()
 const store = useAppStore()
@@ -237,7 +238,7 @@ function toNumber(value) {
       <select v-model="sessionId" aria-label="Select grading session">
         <option v-if="!sessions.length" :value="null">No sessions available</option>
         <option v-for="session in sessions" :key="session.id" :value="session.id">
-          #{{ session.id }} - {{ session.created_at }} - {{ session.answer_key_name || 'No key' }}
+          #{{ session.id }} - {{ formatDateTime(session.created_at) }} - {{ session.answer_key_name || 'No key' }}
         </option>
       </select>
 

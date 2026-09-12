@@ -36,6 +36,13 @@
 -- Feeds: Results page, Student Result header, Excel export.
 -- Replaces the app's `ags_student_results` records.
 -- ---------------------------------------------------------------------
+-- original_filename/image_path/processing_status moved to exam_sheet_page
+-- in V006 (a submission can span several page images) -- pulled back in
+-- here as correlated subqueries rather than a JOIN, since a plain JOIN
+-- against a one-to-many child table would fan out against the
+-- grading_result JOIN below and corrupt the SUM()s. Page 1's file
+-- represents the sheet for display; status is 'error' if any page
+-- errored, 'completed' only once every page is, else 'preprocessing'.
 CREATE OR REPLACE VIEW v_sheet_result AS
 SELECT
     es.sheet_id                                     AS sheet_id,
@@ -45,9 +52,15 @@ SELECT
     si.name                                         AS student_name,
     si.section                                      AS section,
     si.consent_status                               AS consent_status,
-    es.original_filename                            AS original_filename,
-    es.image_path                                   AS image_path,
-    es.processing_status                            AS processing_status,
+    (SELECT esp.original_filename FROM exam_sheet_page esp
+      WHERE esp.sheet_id = es.sheet_id ORDER BY esp.page_no LIMIT 1)   AS original_filename,
+    (SELECT esp.image_path FROM exam_sheet_page esp
+      WHERE esp.sheet_id = es.sheet_id ORDER BY esp.page_no LIMIT 1)   AS image_path,
+    (SELECT CASE
+        WHEN SUM(esp.processing_status = 'error') > 0 THEN 'error'
+        WHEN SUM(esp.processing_status = 'completed') = COUNT(*) THEN 'completed'
+        ELSE 'preprocessing'
+     END FROM exam_sheet_page esp WHERE esp.sheet_id = es.sheet_id)    AS processing_status,
     COALESCE(SUM(gr.score), 0)                      AS score,
     COALESCE(SUM(aki.points), 0)                    AS total,
     CASE
@@ -71,8 +84,7 @@ LEFT JOIN grading_result  gr  ON gr.sheet_id  = es.sheet_id
 LEFT JOIN answer_key_item aki ON aki.item_id  = gr.item_id
 GROUP BY
     es.sheet_id, es.session_id, es.sheet_code, si.participant_code,
-    si.name, si.section, si.consent_status, es.original_filename,
-    es.image_path, es.processing_status, es.upload_date;
+    si.name, si.section, si.consent_status, es.upload_date;
 
 -- ---------------------------------------------------------------------
 -- v_result_item -- one row per graded item, fully denormalised.

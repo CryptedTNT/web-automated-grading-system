@@ -5,10 +5,14 @@
 
 import { ref } from 'vue'
 
-defineProps({
+const props = defineProps({
   placeholder: { type: String, default: 'Password' },
   title: { type: String, default: '' },
   invalid: { type: Boolean, default: false },
+  // Falls back to the visible placeholder so every PasswordField has a
+  // real accessible name -- a title attribute alone doesn't reliably
+  // count as one (axe-core's label-title-only rule flags this).
+  ariaLabel: { type: String, default: '' },
 })
 
 const model = defineModel({ type: String, default: '' })
@@ -27,6 +31,7 @@ defineExpose({ focus: () => input.value?.focus() })
       :type="revealed ? 'text' : 'password'"
       :placeholder="placeholder"
       :title="title"
+      :aria-label="ariaLabel || placeholder"
       :class="{ invalid }"
     >
     <button

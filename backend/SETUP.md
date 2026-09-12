@@ -95,6 +95,20 @@ uvicorn app.main:app --reload --port 8000
 
 Check `http://localhost:8000/api/health` returns `{"status":"ok"}`.
 
+## Before deploying anywhere real (not just localhost)
+
+- Set `SESSION_COOKIE_SECURE=true` in `.env` once the app is served over
+  HTTPS. It defaults to `false` so local `http://localhost` dev keeps
+  working, but leaving it `false` in production means the session
+  cookie could be read over an unencrypted connection.
+- Generate a real `SECRET_KEY` if you haven't (step 4) -- never ship the
+  default dev key.
+- This app handles real student names, handwriting images, and grades.
+  Before processing any real (non-test) student data, check with your
+  institution's research ethics board / data protection office --
+  that's a more direct requirement here than any generic checklist, and
+  independent of anything else described in this file.
+
 ## Notes on the inference pipeline
 
 - `app/inference/detector.py`, `recognizer.py`, `grading.py`, `pipeline.py` --

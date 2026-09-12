@@ -88,26 +88,17 @@ async function saveOverride() {
   if (!item) return
 
   notice.value = ''
-  const originalAutoStatus = item.auto_status || item.status
-  const originalMatch = toNumber(item.match_score)
+  // Only override_action and (for the override case) student_answer are
+  // actually read by API.updateResultItem -- the backend itself derives
+  // score/status/match_score/remarks from the action, since it already
+  // has the item's points and the result's pre-review state to compute
+  // those from correctly (see results.py's review_result()).
   let updates
 
   if (action.value === 'accept') {
-    updates = {
-      earned: toNumber(item.points),
-      status: 'OK',
-      manual_override: 1,
-      override_action: 'accepted_correct',
-      remarks: `Manual review: accepted as correct. Automatic result was ${originalAutoStatus} at ${originalMatch}% match.`,
-    }
+    updates = { override_action: 'accepted_correct' }
   } else if (action.value === 'wrong') {
-    updates = {
-      earned: 0,
-      status: 'Wrong',
-      manual_override: 1,
-      override_action: 'marked_incorrect',
-      remarks: `Manual review: marked incorrect. Automatic result was ${originalAutoStatus} at ${originalMatch}% match.`,
-    }
+    updates = { override_action: 'marked_incorrect' }
   } else {
     const answer = manualAnswer.value.trim()
     invalid.value = false
@@ -117,15 +108,7 @@ async function saveOverride() {
       manualInput.value?.focus()
       return
     }
-    updates = {
-      student_answer: answer,
-      earned: toNumber(item.points),
-      status: 'OK',
-      match_score: 100,
-      manual_override: 1,
-      override_action: 'manual_answer_override',
-      remarks: `Manual review: answer changed to '${answer}' and accepted as correct. Automatic result was ${originalAutoStatus} at ${originalMatch}% match.`,
-    }
+    updates = { student_answer: answer, override_action: 'manual_answer_override' }
   }
 
   const reviewedResultId = item.student_result_id

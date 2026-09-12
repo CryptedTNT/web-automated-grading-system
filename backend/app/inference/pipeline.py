@@ -1,6 +1,7 @@
-"""Runs one scanned sheet through detection -> recognition -> grading.
-Called from routers/sessions.py inside the per-sheet transaction
-described in database/INTEGRATION_CONTRACT.md section 5.
+"""Runs one student's whole exam submission -- one or more page images --
+through detection -> recognition -> grading. Called from
+routers/sessions.py inside the per-sheet transaction described in
+database/INTEGRATION_CONTRACT.md section 5.
 
 Mapping detections to specific answer_key_item rows: the YOLO model's
 classes already tell us the question TYPE of each detected region (see
@@ -13,12 +14,25 @@ vue-app/src/views/AnswerKeyView.vue: section I top to bottom, then II,
 then III, then IV) -- the sheet a student writes on and the answer key
 were generated from the same ordering, so position is a reliable key.
 
+Multi-page submissions (V006's exam_sheet_page): a real exam can span
+several photographed/scanned pages, only the first of which carries a
+recognisable Name/Section header -- continuation pages are blank by
+design (no QR code, no repeated header). Since the questionnaire is
+always laid out in strictly increasing item_no order regardless of
+where a page break happens to fall, pooling each page's per-type
+detections **in page order** (page 1's top-to-bottom list, then page
+2's, then page 3's...) before the same positional zip reconstructs
+exactly the same global order as if every item were on one tall image.
+That is the one thing that changed to support multiple pages -- no
+need to track which items live on which page at all.
+
 Enumeration is the one type needing an extra step: the answer key
 stores several rows per group (enum_group), all sharing one prompt. The
 group's blanks are consecutive in item_no order (see collectItems() in
-AnswerKeyView.vue), so the sorted ENUMERATION detections are chunked by
-each group's blank count, in group order, before handing that group's
-recognized text to match_enumeration_answers() for set-based matching.
+AnswerKeyView.vue), so the sorted ENUMERATION detections (pooled across
+pages the same way) are chunked by each group's blank count, in group
+order, before handing that group's recognized text to
+match_enumeration_answers() for set-based matching.
 
 Recognition confidence below LOW_CONFIDENCE_THRESHOLD downgrades an
 otherwise-decided MC/TF/Identification verdict to "flagged" rather than
@@ -36,7 +50,7 @@ from PIL import Image
 
 from app.inference import recognizer
 from app.inference.detector import Detection, detect_regions
-from app.inference.grading import GradeVerdict, grade_exact, grade_fuzzy, match_enumeration_answers
+from app.inference.grading import GradeVerdict, grade_exact, grade_fuzzy, grade_multiple_choice, match_enumeration_answers
 
 MODEL_NAME = "YOLOv11-seg + TrOCR-custom"
 LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -60,26 +74,40 @@ def _maybe_flag_low_confidence(verdict: GradeVerdict, confidence: float) -> Grad
     )
 
 
-def run_sheet(image_path: str, items: list, crop_dir: Path, sheet_code: str) -> dict:
+def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_code: str) -> dict:
     """
+    image_paths: this submission's page images, in page order (page 1
+    first -- the only one expected to carry the Name/Section header).
     items: AnswerKeyItem ORM rows for this sheet's answer key.
     Returns {
       "identity": {"name": str|None, "section": str|None},
       "answers": [{"item_id", "crop_path", "recognized_text", "confidence", "verdict"}],
     }
     """
-    image = Image.open(image_path)
-    detections = detect_regions(image_path)
+    # Pooled per type across every page, in page order -- see the
+    # module docstring for why this keeps positional pairing correct
+    # across a page break. Each entry carries its own source image
+    # since pages are separate files, unlike the single-image case.
+    by_type: dict[str, list[tuple[Image.Image, Detection]]] = {}
+    # First page that has a given header field wins -- only page 1 is
+    # expected to have one, but nothing here assumes that.
+    identity_boxes: dict[str, tuple[Image.Image, Detection]] = {}
 
-    by_type: dict[str, list[Detection]] = {}
-    identity_boxes: dict[str, Detection] = {}
-    for det in detections:
-        if det.field_name:
-            identity_boxes[det.field_name] = det
-        elif det.question_type:
-            by_type.setdefault(det.question_type, []).append(det)
-    for group in by_type.values():
-        group.sort(key=lambda d: d.y_center)
+    for image_path in image_paths:
+        image = Image.open(image_path)
+        detections = detect_regions(image_path)
+
+        page_by_type: dict[str, list[Detection]] = {}
+        for det in detections:
+            if det.field_name:
+                identity_boxes.setdefault(det.field_name, (image, det))
+            elif det.question_type:
+                page_by_type.setdefault(det.question_type, []).append(det)
+        for group in page_by_type.values():
+            group.sort(key=lambda d: d.y_center)
+
+        for qtype, dets in page_by_type.items():
+            by_type.setdefault(qtype, []).extend((image, det) for det in dets)
 
     items_by_type: dict[str, list] = {}
     for item in items:
@@ -90,7 +118,7 @@ def run_sheet(image_path: str, items: list, crop_dir: Path, sheet_code: str) -> 
     crop_dir.mkdir(parents=True, exist_ok=True)
     answers: list[dict] = []
 
-    def recognize_and_save(det: Detection, item_id: int, suffix: str) -> tuple[str, float, str]:
+    def recognize_and_save(image: Image.Image, det: Detection, item_id: int, suffix: str) -> tuple[str, float, str]:
         crop_img = _crop(image, det.bbox)
         crop_path = crop_dir / f"{sheet_code}_item{item_id}_{suffix}.png"
         crop_img.save(crop_path)
@@ -101,13 +129,18 @@ def run_sheet(image_path: str, items: list, crop_dir: Path, sheet_code: str) -> 
     for qtype in ("MC", "TF", "IDENTIFICATION"):
         dets = by_type.get(qtype, [])
         its = items_by_type.get(qtype, [])
-        for det, item in zip(dets, its):
-            text, confidence, crop_path = recognize_and_save(det, item.item_id, "a")
+        for (image, det), item in zip(dets, its):
+            text, confidence, crop_path = recognize_and_save(image, det, item.item_id, "a")
             if qtype == "IDENTIFICATION":
                 verdict = grade_fuzzy(
                     text, item.correct_answer, item.alternative_answers, float(item.fuzzy_threshold or 85), float(item.points)
                 )
-            else:
+            elif qtype == "MC":
+                # Handles both a plain single-letter answer and a
+                # "select all that apply" one with several correct
+                # letters (e.g. "a,b,c") -- see grade_multiple_choice.
+                verdict = grade_multiple_choice(text, item.correct_answer, item.alternative_answers, float(item.points))
+            else:  # TF
                 verdict = grade_exact(text, item.correct_answer, item.alternative_answers, float(item.points))
             verdict = _maybe_flag_low_confidence(verdict, confidence)
             answers.append(
@@ -139,8 +172,8 @@ def run_sheet(image_path: str, items: list, crop_dir: Path, sheet_code: str) -> 
         cursor += len(group_items)
 
         recognized_texts, crop_paths, confidences = [], [], []
-        for det, item in zip(group_dets, group_items):
-            text, confidence, crop_path = recognize_and_save(det, item.item_id, "a")
+        for (image, det), item in zip(group_dets, group_items):
+            text, confidence, crop_path = recognize_and_save(image, det, item.item_id, "a")
             recognized_texts.append(text)
             crop_paths.append(crop_path)
             confidences.append(confidence)
@@ -167,9 +200,10 @@ def run_sheet(image_path: str, items: list, crop_dir: Path, sheet_code: str) -> 
     # ---- Header fields (best-effort; not graded, just recognized) ----
     identity: dict[str, str] = {}
     for field_name in ("name_field", "section_field"):
-        det = identity_boxes.get(field_name)
-        if det:
-            text, _confidence, _crop_path = recognize_and_save(det, 0, field_name)
+        found = identity_boxes.get(field_name)
+        if found:
+            image, det = found
+            text, _confidence, _crop_path = recognize_and_save(image, det, 0, field_name)
             identity[field_name.replace("_field", "")] = text
 
     return {"identity": identity, "answers": answers}

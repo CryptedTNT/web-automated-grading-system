@@ -1,0 +1,31 @@
+# Caddy config -- serves the built Vue app and reverse-proxies /api to the
+# backend, with automatic HTTPS (Let's Encrypt) just from naming a real
+# domain below. Caddy requests/renews the cert itself the first time it
+# sees traffic on that domain -- no certbot/manual cert setup needed.
+#
+# Install:
+#   sudo apt install caddy
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   (edit the domain and root path below)
+#   sudo systemctl reload caddy
+
+your-domain.com {
+	root * /opt/ags/vue-app/dist
+	encode gzip
+
+	# Same idea as vite.config.js's dev-time proxy, just done by Caddy in
+	# production instead of Vite -- keeps the browser's view of everything
+	# same-origin (no CORS, no cross-origin cookie issues for the session).
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# The app uses hash-based routing (router/index.js's
+	# createWebHashHistory), so every route is really just index.html with
+	# a client-side #/... fragment the server never sees -- no SPA
+	# catch-all rewrite is needed, just serve the static files.
+	handle {
+		file_server
+		try_files {path} /index.html
+	}
+}
