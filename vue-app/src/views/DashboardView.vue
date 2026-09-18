@@ -47,47 +47,78 @@ function badgeClass(status) {
 }
 
 const QUICK_ACTIONS = [
-  { name: 'answer_key', label: 'New Answer Key', variant: 'btn-primary', title: 'Create or edit an answer key.' },
-  { name: 'upload', label: 'Upload Answer Sheets', variant: 'btn-success', title: 'Upload answer sheet images.' },
-  { name: 'results', label: 'View Results', variant: 'btn-secondary', title: 'View grading results.' },
-  { name: 'reports', label: 'Reports & Analytics', variant: 'btn-secondary', title: 'Export reports.' },
+  { name: 'answer_key', label: 'Create answer key', detail: 'Set up questions, answers, and scoring.', variant: 'primary', title: 'Create or edit an answer key.' },
+  { name: 'upload', label: 'Upload answer sheets', detail: 'Add scans or photographs for a class.', variant: 'secondary', title: 'Upload answer sheet images.' },
+  { name: 'results', label: 'Review results', detail: 'Open completed grading sessions.', variant: 'secondary', title: 'View grading results.' },
+  { name: 'reports', label: 'Export report', detail: 'Download results for a completed session.', variant: 'secondary', title: 'Export reports.' },
+]
+
+const WORKFLOW_STEPS = [
+  { number: '01', title: 'Prepare', detail: 'Create an answer key for the assessment.' },
+  { number: '02', title: 'Collect', detail: 'Upload one or more student submissions.' },
+  { number: '03', title: 'Review', detail: 'Check flagged answers and export results.' },
 ]
 </script>
 
 <template>
-  <div>
-    <div class="title-block">
-      <div class="page-title">Dashboard</div>
-      <div class="page-subtitle">Good day, {{ teacherName }}. Here is the current grading overview.</div>
+  <div class="dashboard-page">
+    <div class="title-block dashboard-title-block">
+      <div>
+        <div class="page-title">Good day, {{ teacherName }}.</div>
+        <div class="page-subtitle">Manage assessments, processing, and results from one place.</div>
+      </div>
+      <RouterLink :to="{ name: 'upload' }" custom v-slot="{ navigate }">
+        <button class="btn btn-primary dashboard-cta" title="Upload answer sheet images." @click="navigate">Upload sheets</button>
+      </RouterLink>
     </div>
 
-    <div class="flex gap-16 mb-14" style="flex-wrap:wrap;">
-      <div class="stat-card">
-        <div class="stat-label">Total Sheets Graded</div>
-        <div class="stat-value">{{ stats.sheets }}</div>
-        <div class="stat-delta">Stored in MySQL</div>
+    <section class="dashboard-start" aria-labelledby="start-grading-title">
+      <div class="dashboard-start-copy">
+        <span class="section-eyebrow">Start a grading session</span>
+        <h2 id="start-grading-title">A clear path from answer key to reviewed results.</h2>
+        <p>Create an answer key first, then upload a class set when you are ready to grade.</p>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Total Sessions</div>
-        <div class="stat-value">{{ stats.sessions }}</div>
-        <div class="stat-delta">Completed and processing sessions</div>
+      <div class="dashboard-steps">
+        <div v-for="step in WORKFLOW_STEPS" :key="step.number" class="dashboard-step">
+          <span>{{ step.number }}</span>
+          <div><strong>{{ step.title }}</strong><small>{{ step.detail }}</small></div>
+        </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Flagged for Review</div>
-        <div class="stat-value">{{ stats.flagged }}</div>
-        <div class="stat-delta">Needs teacher review</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Average Score</div>
-        <div class="stat-value">{{ stats.average }}%</div>
-        <div class="stat-delta">Across all saved results</div>
-      </div>
-    </div>
+    </section>
 
-    <div class="workflow-layout">
-      <div class="card workflow-main">
-        <div class="card-title">Recent Grading Sessions</div>
-        <div class="table-wrapper">
+    <section class="metrics-grid" aria-label="Assessment activity summary">
+      <article class="metric-panel">
+        <span class="metric-label">Sheets graded</span>
+        <strong>{{ stats.sheets }}</strong>
+        <span class="metric-caption">Across all saved sessions</span>
+      </article>
+      <article class="metric-panel">
+        <span class="metric-label">Grading sessions</span>
+        <strong>{{ stats.sessions }}</strong>
+        <span class="metric-caption">Completed and in progress</span>
+      </article>
+      <article class="metric-panel metric-panel-alert">
+        <span class="metric-label">Awaiting review</span>
+        <strong>{{ stats.flagged }}</strong>
+        <span class="metric-caption">Flagged answers to check</span>
+      </article>
+      <article class="metric-panel">
+        <span class="metric-label">Average score</span>
+        <strong>{{ stats.average }}<em>%</em></strong>
+        <span class="metric-caption">Across saved results</span>
+      </article>
+    </section>
+
+    <div class="dashboard-content-grid">
+      <section class="session-panel" aria-labelledby="recent-sessions-title">
+        <div class="panel-heading">
+          <div>
+            <span class="section-eyebrow">Session history</span>
+            <h2 id="recent-sessions-title">Recent grading sessions</h2>
+          </div>
+          <RouterLink :to="{ name: 'results' }">View all results</RouterLink>
+        </div>
+        <div class="table-wrapper session-table">
           <table>
             <thead>
               <tr>
@@ -98,25 +129,31 @@ const QUICK_ACTIONS = [
             <tbody>
               <tr v-for="session in recentSessions" :key="session.id">
                 <td>{{ formatDateTime(session.created_at) }}</td>
-                <td>{{ session.answer_key_name || 'No key' }}</td>
+                <td class="session-key">{{ session.answer_key_name || 'No key' }}</td>
                 <td>{{ session.sheets }}</td>
                 <td>{{ session.average }}%</td>
                 <td>{{ session.flagged }}</td>
                 <td><span class="badge" :class="badgeClass(session.status)">{{ session.status }}</span></td>
               </tr>
               <tr v-if="!recentSessions.length">
-                <td colspan="6" class="muted-text" style="text-align:center;padding:24px;">
-                  No grading sessions yet. Create an answer key, upload sheets, then process them.
+                <td colspan="6" class="dashboard-empty">
+                  <strong>No grading sessions yet</strong>
+                  <span>Create an answer key, then upload your first set of answer sheets.</span>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
-      <div class="card workflow-sidebar">
-        <div class="card-title">Quick Actions</div>
-        <div class="flex flex-col gap-8">
+      <aside class="action-panel" aria-labelledby="quick-actions-title">
+        <div class="panel-heading">
+          <div>
+            <span class="section-eyebrow">Shortcuts</span>
+            <h2 id="quick-actions-title">Continue your work</h2>
+          </div>
+        </div>
+        <div class="action-list">
           <RouterLink
             v-for="action in QUICK_ACTIONS"
             :key="action.name"
@@ -124,12 +161,13 @@ const QUICK_ACTIONS = [
             :to="{ name: action.name }"
             custom
           >
-            <button class="btn w-full" :class="action.variant" :title="action.title" @click="navigate">
-              {{ action.label }}
+            <button class="action-link" :class="`action-link-${action.variant}`" :title="action.title" @click="navigate">
+              <span><strong>{{ action.label }}</strong><small>{{ action.detail }}</small></span>
+              <span class="action-arrow" aria-hidden="true">→</span>
             </button>
           </RouterLink>
         </div>
-      </div>
+      </aside>
     </div>
   </div>
 </template>

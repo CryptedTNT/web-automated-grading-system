@@ -11,6 +11,7 @@ import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
+import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,9 +168,9 @@ function clearInvalid(field) {
       <div class="spacer"></div>
       <div class="muted-text text-center">© 2027 AGS. Web-based application.</div>
       <div class="muted-text text-center mt-8">
-        <RouterLink :to="{ name: 'terms' }">Terms</RouterLink> ·
-        <RouterLink :to="{ name: 'privacy' }">Privacy</RouterLink> ·
-        <RouterLink :to="{ name: 'cookies' }">Cookies</RouterLink>
+        <LegalDocumentLink document="terms">Terms</LegalDocumentLink> ·
+        <LegalDocumentLink document="privacy">Privacy</LegalDocumentLink> ·
+        <LegalDocumentLink document="cookies">Cookies</LegalDocumentLink>
       </div>
     </div>
   </div>

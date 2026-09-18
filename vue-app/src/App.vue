@@ -11,6 +11,7 @@ import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app.js'
 import DialogHost from '@/components/DialogHost.vue'
+import AppIcon from '@/components/AppIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,18 +21,19 @@ const store = useAppStore()
    Email is authenticated (not `public`) but still wants the bare,
    sidebar-less look, so it's marked `bare` instead. */
 const isAuthScreen = computed(() => route.meta.public === true || route.meta.bare === true)
+const pageTitle = computed(() => route.meta.title || 'Workspace')
 
 const NAV_ITEMS = [
-  { name: 'dashboard', icon: '▦', label: 'Dashboard', title: 'View overall grading statistics and recent system activity.' },
-  { name: 'answer_key', icon: '▣', label: 'Answer Keys', title: 'Create, edit, save, and delete answer keys.' },
-  { name: 'upload', icon: '⇧', label: 'Upload Sheets', title: 'Upload scanned or captured answer sheet images.' },
-  { name: 'processing', icon: '⚙', label: 'Processing', title: 'Run automated grading (YOLO detection + TrOCR recognition) on the upload queue.' },
-  { name: 'results', icon: '☑', label: 'Results', title: 'View grading session summaries and student scores.' },
-  { name: 'student_result', icon: '◫', label: 'Student Result', title: 'View item-level results for a selected student.' },
-  { name: 'review', icon: '⚑', label: 'Review Flagged', title: 'Manually check flagged answers that need teacher review.' },
-  { name: 'reports', icon: '▤', label: 'Reports', title: 'Export grading sessions.' },
-  { name: 'how_to_use', icon: '?', label: 'How to Use', title: 'Open the step-by-step guide for using the system.' },
-  { name: 'settings', icon: '⚙', label: 'Settings', title: 'Change account, export, template, and display settings.' },
+  { name: 'dashboard', icon: 'dashboard', label: 'Dashboard', title: 'View overall grading statistics and recent system activity.' },
+  { name: 'answer_key', icon: 'answerKeys', label: 'Answer Keys', title: 'Create, edit, save, and delete answer keys.' },
+  { name: 'upload', icon: 'upload', label: 'Upload Sheets', title: 'Upload scanned or captured answer sheet images.' },
+  { name: 'processing', icon: 'processing', label: 'Processing', title: 'Run automated grading (YOLO detection + TrOCR recognition) on the upload queue.' },
+  { name: 'results', icon: 'results', label: 'Results', title: 'View grading session summaries and student scores.' },
+  { name: 'student_result', icon: 'student', label: 'Student Result', title: 'View item-level results for a selected student.' },
+  { name: 'review', icon: 'review', label: 'Review Flagged', title: 'Manually check flagged answers that need teacher review.' },
+  { name: 'reports', icon: 'reports', label: 'Reports', title: 'Export grading sessions.' },
+  { name: 'how_to_use', icon: 'help', label: 'How to Use', title: 'Open the step-by-step guide for using the system.' },
+  { name: 'settings', icon: 'settings', label: 'Settings', title: 'Change account, export, template, and display settings.' },
 ]
 
 /* ---------- Mobile sidebar ---------- */
@@ -104,8 +106,15 @@ async function logout() {
         <!-- .sidebar-title is `white-space: pre-line`, so this newline is
              intentional. Bound from JS so the template compiler's whitespace
              handling cannot collapse it. -->
-        <div class="sidebar-title">{{ 'Automated\nGrading System' }}</div>
-        <div class="sidebar-subtitle">Handwritten Objective Exams</div>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span>A</span><span>G</span></div>
+          <div>
+            <div class="sidebar-title">{{ 'Automated\nGrading System' }}</div>
+            <div class="sidebar-subtitle">Assessment workspace</div>
+          </div>
+        </div>
+
+        <div class="nav-kicker">Workspace</div>
 
         <div class="sidebar-nav">
           <RouterLink
@@ -121,19 +130,23 @@ async function logout() {
               :title="item.title"
               @click="navigate"
             >
-              {{ item.icon }}&nbsp; {{ item.label }}
+              <span class="nav-icon"><AppIcon :name="item.icon" /></span>
+              <span>{{ item.label }}</span>
             </button>
           </RouterLink>
         </div>
 
         <div class="sidebar-spacer"></div>
-        <div class="sidebar-user">{{ store.teacherLabel }}</div>
+        <div class="sidebar-account">
+          <span class="account-avatar" aria-hidden="true">{{ store.teacherLabel?.charAt(0) || 'T' }}</span>
+          <span class="sidebar-user">{{ store.teacherLabel }}</span>
+        </div>
         <button
           class="logout-btn"
           title="Sign out and return to the login page."
           @click="logout"
         >
-          ↩&nbsp; Logout
+          <span class="nav-icon"><AppIcon name="logout" /></span> Logout
         </button>
       </nav>
 
@@ -149,7 +162,10 @@ async function logout() {
           >
             ☰
           </button>
-          <span class="top-title">Automated Grading System</span>
+          <div class="top-heading">
+            <span class="top-eyebrow">Assessment workspace</span>
+            <span class="top-title">{{ pageTitle }}</span>
+          </div>
           <div class="top-spacer"></div>
           <input
             v-model="searchText"
