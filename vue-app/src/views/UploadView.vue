@@ -30,6 +30,7 @@ import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
+import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const router = useRouter()
 const store = useAppStore()
@@ -720,8 +721,8 @@ async function proceed() {
             title="Required: confirms consent was collected before any of these sheets were scanned."
           >
           I have obtained and kept signed consent (per
-          <RouterLink :to="{ name: 'privacy' }" target="_blank">Privacy Policy</RouterLink> /
-          <RouterLink :to="{ name: 'terms' }" target="_blank">Terms</RouterLink>) for every student in this queue.
+          <LegalDocumentLink document="privacy">Privacy Policy</LegalDocumentLink> /
+          <LegalDocumentLink document="terms">Terms</LegalDocumentLink>) for every student in this queue.
         </label>
 
         <div class="workflow-actions">

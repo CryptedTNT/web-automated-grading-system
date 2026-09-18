@@ -4,6 +4,8 @@
    without owning any markup. */
 
 import { dialogs, closeDialog } from '@/services/dialog.js'
+import LegalDocumentModal from '@/components/LegalDocumentModal.vue'
+import { activeLegalDocument, closeLegalDocument, showLegalDocument } from '@/services/legal.js'
 
 function dismiss(dialog) {
   closeDialog(dialog.id, dialog.type === 'confirm' ? false : 'OK')
@@ -11,6 +13,13 @@ function dismiss(dialog) {
 </script>
 
 <template>
+  <LegalDocumentModal
+    v-if="activeLegalDocument"
+    :document="activeLegalDocument"
+    @close="closeLegalDocument"
+    @show-document="showLegalDocument"
+  />
+
   <div
     v-for="dialog in dialogs"
     :key="dialog.id"

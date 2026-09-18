@@ -14,6 +14,7 @@ import { useAppStore } from '@/stores/app.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
+import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const router = useRouter()
 const store = useAppStore()
@@ -186,8 +187,8 @@ async function submit() {
         >
         <span>
           I agree to the
-          <RouterLink :to="{ name: 'terms' }" target="_blank">Terms</RouterLink> and
-          <RouterLink :to="{ name: 'privacy' }" target="_blank">Privacy Policy</RouterLink>.
+          <LegalDocumentLink document="terms">Terms</LegalDocumentLink> and
+          <LegalDocumentLink document="privacy">Privacy Policy</LegalDocumentLink>.
         </span>
       </label>
 

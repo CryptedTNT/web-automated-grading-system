@@ -27,6 +27,7 @@ import { useResendCooldown } from '@/composables/useResendCooldown.js'
 import { questionnaireHtml, paginatePreview } from '@/services/questionnaireTemplate.js'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
+import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const store = useAppStore()
 
@@ -693,9 +694,9 @@ function selectTheme(key) {
         Web frontend with an intentional model-pending processing adapter.
       </div>
       <div class="settings-actions mt-14">
-        <RouterLink :to="{ name: 'terms' }" class="btn btn-secondary btn-small">Terms</RouterLink>
-        <RouterLink :to="{ name: 'privacy' }" class="btn btn-secondary btn-small">Privacy Policy</RouterLink>
-        <RouterLink :to="{ name: 'cookies' }" class="btn btn-secondary btn-small">Cookie Policy</RouterLink>
+        <LegalDocumentLink document="terms" class="btn btn-secondary btn-small">Terms</LegalDocumentLink>
+        <LegalDocumentLink document="privacy" class="btn btn-secondary btn-small">Privacy Policy</LegalDocumentLink>
+        <LegalDocumentLink document="cookies" class="btn btn-secondary btn-small">Cookie Policy</LegalDocumentLink>
       </div>
     </section>
   </div>

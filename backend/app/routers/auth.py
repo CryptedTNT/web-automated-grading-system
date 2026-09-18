@@ -149,6 +149,17 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     if existing:
         raise HTTPException(status_code=409, detail="That username is already taken.")
 
+    # Only username uniqueness used to be enforced -- two accounts could
+    # share one email. Login and forgot-password are both keyed by
+    # username, not email, so that specific lookup was never actually
+    # ambiguous; this is about ordinary data hygiene instead -- one
+    # real inbox should mean one account, not silently let two
+    # unrelated teacher accounts both claim (and separately verify)
+    # the same address.
+    existing_email = db.scalar(select(Faculty).where(Faculty.email == body.email))
+    if existing_email:
+        raise HTTPException(status_code=409, detail="That email is already registered to another account.")
+
     now = datetime.datetime.utcnow()
     faculty = Faculty(
         full_name=body.full_name,
@@ -254,6 +265,14 @@ def update_email(
     # (e.g. clicking "Save Email" without changing anything) silently
     # un-verified an already-verified account for no reason.
     if body.email != faculty.email:
+        # Same uniqueness rule as register() -- otherwise a teacher could
+        # register with a unique email, then change it here to collide
+        # with another account, sidestepping that check entirely.
+        existing_email = db.scalar(
+            select(Faculty).where(Faculty.email == body.email, Faculty.faculty_id != faculty.faculty_id)
+        )
+        if existing_email:
+            raise HTTPException(status_code=409, detail="That email is already registered to another account.")
         faculty.email = body.email
         faculty.email_verified = 0
         db.add(faculty)

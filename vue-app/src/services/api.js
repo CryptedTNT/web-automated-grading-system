@@ -35,6 +35,20 @@ function handleIfSessionExpired(res, path) {
   return true
 }
 
+/* fetch() itself throws (a bare "TypeError: Failed to fetch", not an
+   HTTP error response) when the request never reaches a server at all --
+   backend down, no network, a dropped wifi connection, CORS rejecting it
+   outright. Left unwrapped, that raw browser string is what a teacher
+   would see verbatim in a dialog, with no idea what it means or what to
+   do about it. This turns it into an actionable message instead. */
+async function safeFetch(url, opts) {
+  try {
+    return await fetch(url, opts)
+  } catch {
+    throw new Error('Could not reach the server. Check that it is running and your internet connection is working, then try again.')
+  }
+}
+
 async function request(method, path, body) {
   const opts = {
     method,
@@ -42,7 +56,7 @@ async function request(method, path, body) {
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
   }
-  const res = await fetch(BASE + path, opts)
+  const res = await safeFetch(BASE + path, opts)
   if (res.status === 204) return null
   let data = null
   try {
@@ -245,7 +259,7 @@ export const API = {
     const formData = new FormData()
     for (const file of files) formData.append('files', file)
     formData.append('consent_confirmed', consentConfirmed ? 'true' : 'false')
-    const res = await fetch(`${BASE}/sessions/${sessionId}/sheets`, {
+    const res = await safeFetch(`${BASE}/sessions/${sessionId}/sheets`, {
       method: 'POST',
       credentials: 'include',
       body: formData,
