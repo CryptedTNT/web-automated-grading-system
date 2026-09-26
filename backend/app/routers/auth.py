@@ -143,8 +143,19 @@ def setup_state(db: Session = Depends(get_db)):
     return {"has_user": count is not None}
 
 
+REGISTER_MAX_ATTEMPTS = 10
+REGISTER_WINDOW_SECONDS = 60 * 60
+
+
 @router.post("/auth/register", status_code=201)
 def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    # IP-based, unlike login's per-username limit: there's no account yet
+    # to key on, and this is the one auth endpoint that creates state
+    # (and sends no email of its own to rate-limit against otherwise), so
+    # nothing else here caps how fast one source can mass-create accounts.
+    client_host = request.client.host if request.client else "unknown"
+    check_rate_limit(f"register:{client_host}", REGISTER_MAX_ATTEMPTS, REGISTER_WINDOW_SECONDS)
+
     existing = db.scalar(select(Faculty).where(Faculty.username == body.username))
     if existing:
         raise HTTPException(status_code=409, detail="That username is already taken.")
@@ -239,8 +250,15 @@ def update_password(
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
+    # Same reasoning as login's rate limit: this is a password check, so
+    # it must cost an attacker something even if they already hold a
+    # valid session (e.g. a hijacked/XSS'd one) and are guessing the
+    # current password rather than the session itself.
+    rate_key = f"account_password:{faculty.faculty_id}"
+    check_rate_limit(rate_key, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECONDS)
     if not verify_and_maybe_migrate(faculty, body.current_password, db):
         return {"ok": False}
+    reset_rate_limit(rate_key)
     faculty.password_hash = hash_password(body.new_password)
     faculty.password_salt = None
     db.add(faculty)

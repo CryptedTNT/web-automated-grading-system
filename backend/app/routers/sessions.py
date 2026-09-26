@@ -5,7 +5,7 @@ See INTEGRATION_CONTRACT.md sections 4 "Sessions and processing" and 5
 
 import asyncio
 import datetime
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -31,6 +31,13 @@ from app.security import get_current_faculty
 from app.utils import SESSION_STATUS_TO_CODE, SESSION_STATUS_TO_LABEL, make_sheet_code
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+# A phone photo or flatbed scan of one page is a few MB at most; this is
+# generous headroom above that. Uploads have no size limit otherwise --
+# nothing between the browser and this handler (no reverse proxy in the
+# thesis deployment) caps request body size, so without this a signed-in
+# account could fill the server's disk with a handful of huge requests.
+MAX_PAGE_BYTES = 20 * 1024 * 1024
 
 
 def _session_shape(row: VSessionSummary) -> dict:
@@ -161,7 +168,7 @@ async def upload_sheets(
     the column meaningless as an audit trail.
 
     Detection/recognition/grading runs through app.inference.pipeline's
-    run_sheet_group (YOLOv11-seg + TrOCR) -- see that module's docstring
+    run_sheet_group (YOLOv26n-seg + TrOCR) -- see that module's docstring
     for how each page's detections are pooled in page order before being
     matched to specific answer_key_item rows. A model failure marks
     every page of this submission 'error' and moves on rather than
@@ -195,6 +202,18 @@ async def upload_sheets(
     pages: list[ExamSheetPage] = []
     for page_no, upload in enumerate(files, start=1):
         raw = await upload.read()
+        if len(raw) > MAX_PAGE_BYTES:
+            # Nothing has been committed yet (the sheet row above is only
+            # flushed, not committed) -- roll back the transaction and
+            # remove any earlier pages of THIS submission already written
+            # to disk, so a rejected upload leaves no partial trace.
+            db.rollback()
+            for saved in saved_paths:
+                Path(saved).unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Page {page_no} is larger than the {MAX_PAGE_BYTES // (1024 * 1024)}MB limit per image.",
+            )
         safe_name = _safe_filename(upload.filename)
         saved_path = settings.upload_dir / f"session_{session_id}" / f"{sheet_code}_p{page_no}_{safe_name}"
         saved_path.parent.mkdir(parents=True, exist_ok=True)
