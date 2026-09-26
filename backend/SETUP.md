@@ -46,9 +46,11 @@ backend/models/htr/              TrOCR model directory: config.json,
 ```
 
 The YOLO model's class list (`app/inference/detector.py`'s
-`CLASS_TO_QUESTION_TYPE`/`HEADER_FIELD_CLASSES`) assumes these exact class
-names -- if you retrain with a different label set, check
-`YOLO('models/yolo/best.pt').names` and update that mapping.
+`HEADER_FIELD_CLASSES`) assumes these exact class names: `answer` (any
+answer region, regardless of question type -- pipeline.py resolves the
+type positionally from the answer key, not from the model), `date`,
+`name`, `section`. If you retrain with a different label set, check
+`YOLO('models/yolo/best.pt').names` and update that set.
 
 ## 4. `.env`
 
