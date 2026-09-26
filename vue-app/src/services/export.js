@@ -16,6 +16,22 @@
 import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
 
+/* Excel/LibreOffice treat any cell that STARTS WITH =, +, -, @, or a tab
+   evaluate it as a formula regardless of whether the file is .xlsx or
+   .csv, and older Excel/LibreOffice builds resolve that into DDE command
+   execution on open -- so a teacher's own typed correction (ReviewView's
+   "corrected answer" goes straight into student_answer/remarks below) or
+   an unlucky OCR read starting with one of those characters would carry
+   through untouched otherwise. Prefixing with a straight quote is the
+   standard neutralization: both formats then render it as plain text. */
+const FORMULA_LEAD_RE = /^[=+\-@\t\r]/
+function sanitizeCell(value) {
+  return typeof value === 'string' && FORMULA_LEAD_RE.test(value) ? `'${value}` : value
+}
+function sanitizeRows(rows) {
+  return rows.map((row) => row.map(sanitizeCell))
+}
+
 export async function exportSessionToFile(sessionId) {
   const id = parseInt(sessionId) || null
   if (!id) {
@@ -31,8 +47,8 @@ export async function exportSessionToFile(sessionId) {
 
   const prefs = await API.getExportPreferences()
   const requestedFilename = await formatExportFilename(id, prefs)
-  const summaryData = buildSummaryRows(results, prefs)
-  const detailData = prefs.include_item_scores ? await buildDetailRows(results, prefs) : null
+  const summaryData = sanitizeRows(buildSummaryRows(results, prefs))
+  const detailData = prefs.include_item_scores ? sanitizeRows(await buildDetailRows(results, prefs)) : null
   const forceCsv = /\.csv$/i.test(requestedFilename)
 
   if (!forceCsv && typeof XLSX !== 'undefined') {

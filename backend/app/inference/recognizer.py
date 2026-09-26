@@ -1,8 +1,7 @@
 """TrOCR wrapper -- recognizes handwritten text from a cropped answer
-region. The model is a small custom TrOCR architecture (not a fine-tune
-of microsoft/trocr-base-handwritten -- see models/htr/config.json,
-hidden_size 384 vs the base model's 768), saved at backend/models/htr/
-as config + tokenizer + model.safetensors.
+region. The model is a fine-tuned TrOCR-base-sized checkpoint (encoder
+hidden_size 768, decoder d_model 1024 -- see models/htr/config.json),
+saved at backend/models/htr/ as config + tokenizer + model.safetensors.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ _model: VisionEncoderDecoderModel | None = None
 
 
 def _load():
-    """Loads the processor/model once per process -- loading a 235MB
+    """Loads the processor/model once per process -- loading a ~1.24GB
     checkpoint per request would make every upload unusably slow."""
     global _processor, _model
     if _model is None:

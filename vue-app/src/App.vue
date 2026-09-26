@@ -107,7 +107,7 @@ async function logout() {
              intentional. Bound from JS so the template compiler's whitespace
              handling cannot collapse it. -->
         <div class="brand-lockup">
-          <div class="brand-mark" aria-hidden="true"><span>A</span><span>G</span></div>
+          <div class="brand-mark" aria-hidden="true"><span>A</span><span>G</span><span>S</span></div>
           <div>
             <div class="sidebar-title">{{ 'Automated\nGrading System' }}</div>
             <div class="sidebar-subtitle">Assessment workspace</div>

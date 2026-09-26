@@ -10,7 +10,7 @@
 
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { API } from '@/services/api.js'
+import { API, BASE } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 
@@ -32,6 +32,16 @@ const sessionId = computed(() => store.currentSessionId)
    computed over localStorage. */
 const currentItem = ref(null)
 const result = ref(null)
+// True once the crop image fails to load for the current item (no answer
+// region was detected for it, or the file is missing) -- reset every time
+// a new item loads, since "missing" is per-item, not sticky.
+const cropMissing = ref(false)
+
+/* /api/results/{id}/crop serves the actual cropped answer-region image
+   the HTR model read, ownership-checked the same as every other
+   result-scoped endpoint (see results.py's result_crop()) -- browser
+   sends the session cookie automatically, same as every other request. */
+const cropImageUrl = computed(() => (currentItem.value ? `${BASE}/results/${currentItem.value.id}/crop` : ''))
 
 /* Prefer the student already selected on the Results page, but only
    if they belong to this session — otherwise sweep the whole session.
@@ -55,6 +65,7 @@ async function loadCurrentItem() {
   action.value = 'override'
   manualAnswer.value = item?.correct_answer || ''
   invalid.value = false
+  cropMissing.value = false
 }
 
 const autoStatus = computed(() =>
@@ -73,9 +84,14 @@ watch(
 )
 
 function statusClass(status) {
-  if (status === 'OK') return 'badge-success'
-  if (status === 'Flagged') return 'badge-warning'
-  if (status === 'Wrong') return 'badge-danger'
+  // Same item-level vocabulary as StudentResultView.vue's statusClass()
+  // -- 'correct'|'incorrect'|'flagged', not the sheet-level 'OK'/'Wrong'
+  // labels. This always fell through to the gray fallback before, since
+  // the API's next-flagged response didn't even send auto_status/status
+  // for autoStatus (above) to read.
+  if (status === 'correct') return 'badge-success'
+  if (status === 'flagged') return 'badge-warning'
+  if (status === 'incorrect') return 'badge-danger'
   return 'badge-gray'
 }
 
@@ -177,6 +193,19 @@ function openLastStudent() {
           <span class="badge badge-warning">Flagged</span>
           <span>{{ currentItem.type || 'Question' }}</span>
           <span v-if="currentItem.enum_group">Group {{ currentItem.enum_group }}</span>
+        </div>
+
+        <div class="comparison-card scanned-answer-card">
+          <div class="card-title">Scanned Answer</div>
+          <img
+            v-if="!cropMissing"
+            :key="cropImageUrl"
+            :src="cropImageUrl"
+            :alt="`Scanned answer region for item ${currentItem.item_no}`"
+            class="review-crop-image"
+            @error="cropMissing = true"
+          >
+          <div v-else class="muted-text">No scanned image is available for this item.</div>
         </div>
 
         <div class="comparison-row">

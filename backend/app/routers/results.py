@@ -4,11 +4,14 @@ commit".
 """
 
 import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.models import (
     AnswerKeyItem,
@@ -157,7 +160,36 @@ def next_flagged(
         "match_score": float(row.match_score) if row.match_score is not None else 0,
         "points": float(row.points),
         "student_result_id": row.sheet_id,
+        "auto_status": row.auto_status,
+        "status": row.status,
+        "model_used": row.model_used,
     }
+
+
+@router.get("/results/{result_id}/crop")
+def result_crop(result_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
+    """Serves the actual cropped answer-region image handed to the HTR
+    model for this result, so a teacher reviewing a flagged item can see
+    the handwriting itself next to the extracted/correct answer text --
+    not just take the OCR's word for it.
+
+    Ownership-checked the same as every other result-scoped endpoint
+    (_owned_result), then the stored path is resolved and confirmed to
+    actually live under settings.crop_dir before being served -- crop_path
+    was never client-supplied (it's whatever pipeline.py wrote at grading
+    time), but nothing here should serve an arbitrary filesystem path
+    just because a DB row happens to contain one.
+    """
+    result = _owned_result(result_id, faculty, db)
+    answer = db.get(StudentAnswer, result.recognized_id) if result.recognized_id else None
+    if not answer or not answer.crop_path:
+        raise HTTPException(status_code=404, detail="No cropped image is available for this item.")
+
+    crop_path = Path(answer.crop_path).resolve()
+    crop_root = settings.crop_dir.resolve()
+    if not crop_path.is_file() or not crop_path.is_relative_to(crop_root):
+        raise HTTPException(status_code=404, detail="Cropped image file is missing.")
+    return FileResponse(crop_path, media_type="image/png")
 
 
 @router.post("/results/{result_id}/review")

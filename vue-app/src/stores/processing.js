@@ -147,6 +147,7 @@ export const useProcessingStore = defineStore('processing', {
     async _run(groups, keyId) {
       let sessionId = null
       const app = useAppStore()
+      let failedCount = 0
 
       try {
         sessionId = await API.createSession(keyId, sourceLabel(groups))
@@ -164,11 +165,25 @@ export const useProcessingStore = defineStore('processing', {
           const pageWord = group.pages.length === 1 ? '1 page' : `${group.pages.length} pages`
           this.appendLog(`[${index + 1}/${groups.length}] Uploading and grading ${this.currentFile} (${pageWord}).`)
 
-          await API.uploadSheetGroup(sessionId, group.pages.map((entry) => entry.file), app.consentConfirmed)
+          // One student's upload failing here used to throw straight
+          // out to the catch below, marking the WHOLE session "Failed"
+          // and abandoning every remaining student in what could be a
+          // 50-submission batch -- a single oversized photo or transient
+          // network blip on submission #10 shouldn't cost #11-50 too.
+          // Logging it and moving on keeps the rest of the run's progress.
+          try {
+            await API.uploadSheetGroup(sessionId, group.pages.map((entry) => entry.file), app.consentConfirmed)
+            this.appendLog(`[${index + 1}/${groups.length}] ${this.currentFile} graded.`, 'success')
+          } catch (error) {
+            failedCount += 1
+            this.appendLog(
+              `[${index + 1}/${groups.length}] ${this.currentFile} failed to upload: ${error.message || error}`,
+              'error',
+            )
+          }
 
           this.completed = index + 1
           this.progress = Math.round((this.completed / groups.length) * 100)
-          this.appendLog(`[${index + 1}/${groups.length}] ${this.currentFile} graded.`, 'success')
         }
 
         if (this.cancelRequested) {
@@ -191,7 +206,12 @@ export const useProcessingStore = defineStore('processing', {
         /* The queue is consumed; clearing it stops a second click from
            creating duplicate records for the same images. */
         app.uploadFiles = []
-        this.appendLog(`Session #${sessionId} completed. Open Results to continue.`, 'success')
+        this.appendLog(
+          failedCount
+            ? `Session #${sessionId} completed with ${failedCount} of ${groups.length} submission(s) that failed to upload -- see the log above for which. Open Results to review what graded successfully.`
+            : `Session #${sessionId} completed. Open Results to continue.`,
+          failedCount ? 'error' : 'success',
+        )
         return sessionId
       } catch (error) {
         if (sessionId) await API.updateSessionStatus(sessionId, 'Failed')

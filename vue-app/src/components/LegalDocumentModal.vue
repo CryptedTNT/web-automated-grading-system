@@ -42,8 +42,6 @@ watch(() => props.document, focusClose)
 
       <div class="legal-modal-body" tabindex="0">
         <template v-if="document === 'terms'">
-          <p class="legal-updated">Last updated: this is a project document — update the date when you edit it.</p>
-          <div class="legal-notice">This is a draft written for a thesis prototype, not a substitute for legal advice — have it reviewed before any real (non-classroom-test) deployment.</div>
           <h3>1. What this system is</h3>
           <p>An automated grading tool for handwritten objective exams (multiple choice, true/false, identification, and enumeration). It is a research prototype: automated recognition and grading can be wrong, and every result is meant to be reviewed by the teacher, not relied on as a final grade without review.</p>
           <h3>2. Accounts</h3>
@@ -61,8 +59,6 @@ watch(() => props.document, focusClose)
         </template>
 
         <template v-else-if="document === 'privacy'">
-          <p class="legal-updated">Last updated: this is a project document — update the date when you edit it.</p>
-          <div class="legal-notice">This is a draft written for a thesis prototype, not a substitute for legal advice. Before processing any real student data, have it reviewed against your institution's data privacy and research ethics requirements.</div>
           <h3>1. Who this applies to</h3>
           <p>This system connects teachers, who create accounts and use the system directly, and students, whose names, handwriting, and scores may appear because a teacher uploaded their answer sheets for grading. Students do not create accounts or use this system directly.</p>
           <h3>2. What we collect</h3>
@@ -76,13 +72,11 @@ watch(() => props.document, focusClose)
           <h3>5. Retention, security, and rights</h3>
           <p>Uploaded sheets, recognized answers, and results are kept while the teacher account and grading sessions exist. Passwords and verification/reset codes are hashed. A teacher or student, through their institution, may request access to, correction of, or erasure of personal data in line with applicable law.</p>
           <h3>6. Changes and contact</h3>
-          <p>Meaningful changes will be reflected in the last-updated line. Questions about this policy or data requests should go to the researchers or administrator operating this deployment.</p>
+          <p>Questions about this policy or data requests should go to the researchers or administrator operating this deployment.</p>
           <p class="legal-cross-link">For browser storage details, see the <button type="button" class="legal-document-link" @click="emit('show-document', 'cookies')">Cookie Policy</button>.</p>
         </template>
 
         <template v-else>
-          <p class="legal-updated">Last updated: this is a project document — update the date when you edit it.</p>
-          <div class="legal-notice">This is a draft written for a thesis prototype, not a substitute for legal advice.</div>
           <h3>What this system actually uses</h3>
           <p>Exactly two small pieces of browser storage, and nothing else:</p>
           <ul><li><strong>A session cookie</strong> keeps you signed in between page loads. It is strictly necessary for the system to function.</li><li><strong>A local storage entry for your theme preference</strong> remembers your chosen color theme on this device. It never leaves your browser.</li></ul>

@@ -8,15 +8,53 @@ the verification steps in the plan."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
+
+# Loose but real email-shape check (local@domain.tld) -- not a full RFC 5322
+# parser, just enough to reject obvious garbage. Every registration/change
+# path used to accept ANY string here, including one with embedded
+# newlines, which email_sender.py then hands straight to EmailMessage's
+# "To" header -- a value never actually shaped like an email address is
+# the more likely everyday bug this catches, header injection is the
+# defense-in-depth reason for the \s exclusion specifically.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_email_format(value: str) -> str:
+    value = value.strip()
+    if not _EMAIL_RE.match(value):
+        raise ValueError("Enter a valid email address.")
+    return value
+
+
+def _validate_password_strength(value: str) -> str:
+    # Mirrors vue-app/src/services/api.js's PASSWORD_RULES exactly -- that
+    # check was frontend-only, so posting straight to /api/auth/register
+    # (or any of the other password-setting endpoints) bypassed it
+    # entirely and let a caller set an empty/blank password.
+    if (
+        len(value) < 8
+        or not re.search(r"[A-Za-z]", value)
+        or not re.search(r"[0-9]", value)
+        or not re.search(r"[^A-Za-z0-9]", value)
+    ):
+        raise ValueError(
+            "Password must be at least 8 characters long and include a letter, a number, and a special character."
+        )
+    return value
 
 
 class RegisterRequest(BaseModel):
-    full_name: str
-    institution: str | None = None
-    username: str
+    full_name: str = Field(min_length=1, max_length=150)
+    institution: str | None = Field(default=None, max_length=150)
+    username: str = Field(min_length=1, max_length=60)
     password: str
-    email: str
+    email: str = Field(max_length=255)
+
+    _check_email = field_validator("email")(_validate_email_format)
+    _check_password = field_validator("password")(_validate_password_strength)
 
 
 class LoginRequest(BaseModel):
@@ -29,7 +67,9 @@ class VerifyEmailCodeRequest(BaseModel):
 
 
 class UpdateEmailRequest(BaseModel):
-    email: str
+    email: str = Field(max_length=255)
+
+    _check_email = field_validator("email")(_validate_email_format)
 
 
 class ForgotSendCodeRequest(BaseModel):
@@ -41,37 +81,45 @@ class ForgotResetRequest(BaseModel):
     code: str
     new_password: str
 
+    _check_password = field_validator("new_password")(_validate_password_strength)
+
 
 class UpdateProfileRequest(BaseModel):
-    full_name: str
-    institution: str | None = None
+    full_name: str = Field(min_length=1, max_length=150)
+    institution: str | None = Field(default=None, max_length=150)
 
 
 class UpdatePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+    _check_password = field_validator("new_password")(_validate_password_strength)
+
 
 class AnswerKeyCreateRequest(BaseModel):
-    name: str
-    subject: str = ""
+    name: str = Field(max_length=150)
+    subject: str = Field(default="", max_length=150)
 
 
 class AnswerKeyUpdateRequest(BaseModel):
-    name: str
-    subject: str = ""
+    name: str = Field(max_length=150)
+    subject: str = Field(default="", max_length=150)
 
 
 class AnswerKeyItemIn(BaseModel):
-    item_no: int
+    # Bounds match what the builder (AnswerKeyView.vue's collectItems())
+    # always produces -- gt=0/ge=1 exist for the API caller that isn't
+    # that page: without them, a negative points value would silently
+    # corrupt every SUM() total in R__views.sql for that item's sheet.
+    item_no: int = Field(ge=1)
     type: str  # UI label, e.g. "Multiple Choice"
     enum_group: int | None = None
     question_text: str = ""
     choices: dict | None = None
     correct_answer: str
     alternatives: str = ""
-    points: float = 1.0
-    fuzzy_threshold: float = 85.0
+    points: float = Field(default=1.0, gt=0)
+    fuzzy_threshold: float = Field(default=85.0, ge=0, le=100)
 
 
 class ReplaceAnswerKeyItemsRequest(BaseModel):
@@ -80,8 +128,8 @@ class ReplaceAnswerKeyItemsRequest(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     answer_key_id: int
-    folder: str | None = None
-    session_name: str | None = None
+    folder: str | None = Field(default=None, max_length=255)
+    session_name: str | None = Field(default=None, max_length=150)
     total_sheets: int = 0
 
 

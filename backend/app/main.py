@@ -10,7 +10,20 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import settings
 from app.routers import answer_keys, auth, dashboard, results, sessions, settings as settings_router
 
-app = FastAPI(title="Automated Grading System API")
+# Swagger/ReDoc/openapi.json are public by default -- viewing them needs
+# no session cookie, only calling the endpoints they describe does. That's
+# not a data leak, but it does hand anyone a full map of the API surface
+# for free. SESSION_COOKIE_SECURE is already the flag that distinguishes
+# a real deployment from local dev (see config.py) -- reuse it here so a
+# real deployment doesn't publish its own API map, while local dev keeps
+# the docs.
+_docs_enabled = not settings.session_cookie_secure
+app = FastAPI(
+    title="Automated Grading System API",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
 # Signed-cookie session, the direct equivalent of Flask's session[...] --
 # see app/security.py for why this project uses cookie sessions instead
