@@ -14,7 +14,7 @@
    token to store client-side.
    ============================================================ */
 
-const BASE = '/api'
+export const BASE = '/api'
 
 /* A 401 from any real (already-authenticated) endpoint means this tab's
    session died server-side -- logged out in another tab, expired, or

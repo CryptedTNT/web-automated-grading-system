@@ -33,9 +33,14 @@ const hasPendingModel = computed(() =>
 const flaggedCount = computed(() => Number(result.value?.flagged_count) || 0)
 
 function statusClass(status) {
-  if (status === 'OK') return 'badge-success'
-  if (status === 'Flagged') return 'badge-warning'
-  if (status === 'Wrong') return 'badge-danger'
+  // Item-level status is 'correct'|'incorrect'|'flagged' (grading_result's
+  // own values, see database/APP_MAPPING.md) -- NOT the 'OK'/'Wrong'
+  // sheet-level labels ResultsView.vue's statusClass() checks for. Every
+  // badge on this page used to render as the gray fallback because these
+  // comparisons never matched the real data.
+  if (status === 'correct') return 'badge-success'
+  if (status === 'flagged') return 'badge-warning'
+  if (status === 'incorrect') return 'badge-danger'
   return 'badge-gray'
 }
 
