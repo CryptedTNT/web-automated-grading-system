@@ -65,7 +65,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
-from app.inference import recognizer, scribble
+from app.inference import recognizer
 from app.inference.detector import Detection, detect_regions
 from app.inference.grading import (
     GradeVerdict,
@@ -107,20 +107,6 @@ def _crop(image: Image.Image, bbox: tuple[int, int, int, int], polygon: tuple | 
     x1, y1 = max(0, x1), max(0, y1)
     x2, y2 = min(image.width, x2), min(image.height, y2)
     return image.crop((x1, y1, x2, y2))
-
-
-def _read_ignoring_scribbles(crop: Image.Image) -> tuple[str, float]:
-    """Recognizes the crop; if it holds crossed-out/scribbled writing, prefers
-    the reading of what is left once the scribble is whited out -- but only
-    when app.inference.scribble's two guards agree, so ordinary (even bold)
-    handwriting is never altered."""
-    text, confidence = recognizer.recognize_text(crop)
-    found = scribble.candidate(crop)
-    if found is not None:
-        cleaned_text, cleaned_confidence = recognizer.recognize_text(found[0])
-        if scribble.accept_cleaned(confidence, cleaned_text, cleaned_confidence):
-            return cleaned_text, cleaned_confidence
-    return text, confidence
 
 
 def _true_false_word(text: str) -> str:
@@ -185,7 +171,13 @@ def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_c
         crop_img = _crop(image, det.bbox, det.polygon)
         crop_path = crop_dir / f"{sheet_code}_item{item_id}_{suffix}.png"
         crop_img.save(crop_path)  # saved as-is so the teacher can see any crossed-out writing
-        text, confidence = _read_ignoring_scribbles(crop_img)
+        # Do not alter handwritten pixels before recognition. The former
+        # automatic scribble-removal pass occasionally treated ordinary
+        # handwriting as a correction and replaced a readable name with an
+        # unrelated, higher-confidence word (for example, "DeepQA"). A
+        # crossed-out or ambiguous answer remains visible for the teacher to
+        # review instead of being changed by an unreliable preprocessor.
+        text, confidence = recognizer.recognize_text(crop_img)
         return text, confidence, str(crop_path)
 
     # ---- Global positional pairing: one detection per item, in exam order ----
