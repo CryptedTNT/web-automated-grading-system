@@ -3,6 +3,7 @@
    Mounted once in App.vue so every page can call showMessage()
    without owning any markup. */
 
+import { onMounted, onUnmounted } from 'vue'
 import { dialogs, closeDialog } from '@/services/dialog.js'
 import LegalDocumentModal from '@/components/LegalDocumentModal.vue'
 import { activeLegalDocument, closeLegalDocument, showLegalDocument } from '@/services/legal.js'
@@ -10,6 +11,16 @@ import { activeLegalDocument, closeLegalDocument, showLegalDocument } from '@/se
 function dismiss(dialog) {
   closeDialog(dialog.id, dialog.type === 'confirm' ? false : 'OK')
 }
+
+// Keyboard-only users had no way to dismiss a toast at all -- clicking
+// the overlay was the only escape hatch. Only the topmost (most recently
+// pushed) dialog responds, matching how a stack of real modals behaves.
+function onKeydown(event) {
+  if (event.key !== 'Escape' || !dialogs.length) return
+  dismiss(dialogs[dialogs.length - 1])
+}
+onMounted(() => document.addEventListener('keydown', onKeydown))
+onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
@@ -26,8 +37,8 @@ function dismiss(dialog) {
     class="toast-overlay"
     @click.self="dismiss(dialog)"
   >
-    <div class="toast-box">
-      <div class="toast-title">{{ dialog.title }}</div>
+    <div class="toast-box" role="dialog" aria-modal="true" :aria-labelledby="`dialog-title-${dialog.id}`">
+      <div :id="`dialog-title-${dialog.id}`" class="toast-title">{{ dialog.title }}</div>
       <div class="toast-message">{{ dialog.message }}</div>
 
       <div v-if="dialog.type === 'confirm'" class="toast-actions">

@@ -18,15 +18,6 @@
 <template>
   <div class="legal-page">
     <h1 class="page-title">Privacy Policy</h1>
-    <div class="legal-updated">Last updated: this is a project document — update the date when you edit it.</div>
-
-    <div class="legal-notice">
-      This is a draft written for a thesis prototype, not a substitute for legal advice. Before
-      processing any real (non-test) student data, have this reviewed against your institution's
-      data privacy office / research ethics board requirements — that review, not this page, is
-      what actually governs whether real data collection is permitted.
-    </div>
-
     <h2>1. Who this applies to</h2>
     <p>
       This system has two kinds of people connected to it, and they are treated differently:
@@ -98,8 +89,7 @@
 
     <h2>9. Changes to this policy</h2>
     <p>
-      This page may be updated as the system changes. Meaningful changes will be reflected in the
-      "Last updated" line above.
+      This page may be updated as the system changes.
     </p>
 
     <h2>10. Contact</h2>

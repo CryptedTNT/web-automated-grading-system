@@ -16,12 +16,6 @@
 <template>
   <div class="legal-page">
     <h1 class="page-title">Cookie Policy</h1>
-    <div class="legal-updated">Last updated: this is a project document — update the date when you edit it.</div>
-
-    <div class="legal-notice">
-      This is a draft written for a thesis prototype, not a substitute for legal advice.
-    </div>
-
     <h2>What this system actually uses</h2>
     <p>Exactly two small pieces of browser storage, and nothing else:</p>
     <ul>

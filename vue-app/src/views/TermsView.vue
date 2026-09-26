@@ -8,13 +8,6 @@
 <template>
   <div class="legal-page">
     <h1 class="page-title">Terms and Conditions</h1>
-    <div class="legal-updated">Last updated: this is a project document — update the date when you edit it.</div>
-
-    <div class="legal-notice">
-      This is a draft written for a thesis prototype, not a substitute for legal advice — have it
-      reviewed before any real (non-classroom-test) deployment.
-    </div>
-
     <h2>1. What this system is</h2>
     <p>
       An automated grading tool for handwritten objective exams (multiple choice, true/false,

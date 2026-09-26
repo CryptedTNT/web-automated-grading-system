@@ -91,6 +91,11 @@ html, body {
    links actually rendered as before this was hardcoded here. */
 a { color: #000; text-decoration: underline; }
 a:hover { color: var(--primary-hover); }
+/* The literal #000 above was chosen for light mode's cascade issue (see
+   the comment further up this file) but never got a dark-theme
+   counterpart -- black text on a dark background is unreadable, e.g.
+   Dashboard's "View all results" link. */
+[data-theme="dark"] a { color: var(--text-primary); }
 
 /* ---------- App Shell ---------- */
 #app-root {
@@ -153,9 +158,9 @@ a:hover { color: var(--primary-hover); }
 .hero-panel .hero-icon {
   width: 38px; height: 38px;
   display: grid; place-content: center;
-  grid-template-columns: repeat(2, auto);
+  grid-template-columns: repeat(3, auto);
   column-gap: 1px;
-  font-size: 13px; font-weight: 800; letter-spacing: -1px;
+  font-size: 12px; font-weight: 800; letter-spacing: -1px;
   color: var(--hero-bg);
   background: #FFF;
   border-radius: 10px;
@@ -702,6 +707,20 @@ table input, table select {
   font-size: 30px; font-style: italic; margin-top: 8px;
   word-break: break-all;
 }
+.scanned-answer-card { margin: 14px 0 0; }
+.review-crop-image {
+  display: block;
+  max-width: 100%;
+  max-height: 160px;
+  margin-top: 8px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  /* Crops are saved with everything outside the detected outline painted
+     white (see pipeline.py's _crop()) -- a light neutral background here
+     keeps that white fill from blending into the card in light mode
+     while still reading correctly in dark mode. */
+  background: #FFFFFF;
+}
 
 /* ---------- Theme Swatches ---------- */
 .theme-row {
@@ -987,7 +1006,9 @@ table input, table select {
 }
 .legal-page h2 { font-size: 15px; font-weight: 800; color: var(--text-heading); margin: 24px 0 8px; }
 .legal-page h2:first-of-type { margin-top: 0; }
-.legal-page p, .legal-page li { color: var(--text-primary); font-size: 13.5px; }
+/* Literal black, not var(--text-primary) -- same reason as .legal-modal-body
+   above and the `a` rule near the top of this file. */
+.legal-page p, .legal-page li { color: #000; font-size: 13.5px; }
 .legal-page ul { margin: 6px 0 6px 20px; padding: 0; }
 .legal-page li { margin-bottom: 4px; }
 .legal-page .legal-updated { color: var(--text-muted); font-size: 12px; margin-bottom: 20px; }
@@ -1840,7 +1861,10 @@ table tr:hover { background: #F6FAFE; }
 .legal-modal-body {
   overflow-y: auto;
   padding: 22px 24px 28px;
-  color: var(--text-primary);
+  /* Literal black, not var(--text-primary) -- same reason as the `a`
+     rule near the top of this file: that variable is redefined further
+     down to #26384A, a dark blue-tinted slate, not a neutral color. */
+  color: #000;
   font-size: 13px;
   line-height: 1.62;
 }
@@ -1873,6 +1897,7 @@ table tr:hover { background: #F6FAFE; }
 [data-theme="dark"] .legal-page { color: var(--text-primary); }
 [data-theme="dark"] .legal-page p,
 [data-theme="dark"] .legal-page li { color: var(--text-primary); }
+[data-theme="dark"] .legal-modal-body { color: var(--text-primary); }
 [data-theme="dark"] .legal-page .legal-updated { color: var(--text-muted); }
 [data-theme="dark"] .legal-page .legal-notice,
 [data-theme="dark"] .legal-modal-body .legal-notice {
@@ -1914,9 +1939,12 @@ html:not([data-theme="dark"]) #sidebar {
   width: 250px;
   min-width: 250px;
   padding: 24px 12px 17px;
+  /* var(--sidebar-bg), not a hardcoded navy -- this whole block used to
+     override every theme with the same Ocean Blue-specific colors
+     regardless of which palette (theme.js's PALETTES) was selected. */
   background:
-    radial-gradient(circle at 14% 0%, rgba(75, 141, 204, .25), transparent 34%),
-    linear-gradient(180deg, #123A60 0%, #0B2946 100%);
+    radial-gradient(circle at 14% 0%, rgba(255, 255, 255, .16), transparent 34%),
+    linear-gradient(180deg, var(--sidebar-bg) 0%, color-mix(in srgb, var(--sidebar-bg) 65%, black) 100%);
 }
 html:not([data-theme="dark"]) .brand-lockup { padding: 5px 10px 28px; }
 html:not([data-theme="dark"]) .brand-mark {
@@ -1944,7 +1972,7 @@ html:not([data-theme="dark"]) .sidebar-btn:hover {
 }
 html:not([data-theme="dark"]) .sidebar-btn.active {
   background: #FFFFFF;
-  color: #173F64;
+  color: var(--sidebar-bg);
   border-color: rgba(255,255,255,.55);
   box-shadow: 0 7px 18px rgba(1, 22, 41, .23);
 }
@@ -1982,7 +2010,7 @@ html:not([data-theme="dark"]) .btn {
   transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
 }
 html:not([data-theme="dark"]) .btn:hover:not(:disabled) { transform: translateY(-1px); }
-html:not([data-theme="dark"]) .btn-primary { box-shadow: 0 6px 14px rgba(44,110,188,.2); }
+html:not([data-theme="dark"]) .btn-primary { box-shadow: 0 6px 14px color-mix(in srgb, var(--primary) 20%, transparent); }
 html:not([data-theme="dark"]) .btn-secondary { border-color: #D6E2ED; color: #29465F; }
 html:not([data-theme="dark"]) .card,
 html:not([data-theme="dark"]) .comparison-card,
@@ -2017,10 +2045,12 @@ html:not([data-theme="dark"]) .dashboard-start {
   padding: 31px 34px;
   border: 1px solid rgba(25, 70, 111, .32);
   border-radius: 18px;
+  /* var(--hero-bg), not a hardcoded navy -- same reasoning as #sidebar
+     above. */
   background:
-    radial-gradient(circle at 86% -70%, rgba(92, 156, 224, .34), transparent 55%),
-    radial-gradient(circle at 22% 150%, rgba(7, 23, 46, .44), transparent 48%),
-    linear-gradient(118deg, #0D3154 0%, #174C77 100%);
+    radial-gradient(circle at 86% -70%, rgba(255, 255, 255, .22), transparent 55%),
+    radial-gradient(circle at 22% 150%, rgba(0, 0, 0, .34), transparent 48%),
+    linear-gradient(118deg, var(--hero-bg) 0%, color-mix(in srgb, var(--hero-bg) 65%, white) 100%);
   box-shadow: 0 15px 34px rgba(16, 52, 84, .16);
 }
 html:not([data-theme="dark"]) .dashboard-start::after {
@@ -2189,11 +2219,11 @@ html:not([data-theme="dark"]) .btn {
   letter-spacing: -.01em;
 }
 html:not([data-theme="dark"]) .btn-primary {
-  background: #2868B2;
-  border-color: #2868B2;
-  box-shadow: 0 5px 13px rgba(36, 99, 171, .19);
+  background: var(--primary);
+  border-color: var(--primary);
+  box-shadow: 0 5px 13px color-mix(in srgb, var(--primary) 19%, transparent);
 }
-html:not([data-theme="dark"]) .btn-primary:hover { background: #205B9E; border-color: #205B9E; }
+html:not([data-theme="dark"]) .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 html:not([data-theme="dark"]) .btn-success { background: #318C69; border-color: #318C69; }
 html:not([data-theme="dark"]) .btn-danger { background: #C9555B; border-color: #C9555B; }
 html:not([data-theme="dark"]) .btn-secondary { background: #FFFFFF; border-color: #D7E3ED; color: #294963; }
@@ -2214,8 +2244,8 @@ html:not([data-theme="dark"]) textarea:hover { border-color: #BFD0DF; }
 html:not([data-theme="dark"]) input:focus,
 html:not([data-theme="dark"]) select:focus,
 html:not([data-theme="dark"]) textarea:focus {
-  border-color: #4A83C2;
-  box-shadow: 0 0 0 3px rgba(48, 112, 186, .12);
+  border-color: var(--input-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--input-focus) 12%, transparent);
 }
 html:not([data-theme="dark"]) table { color: #29455E; }
 html:not([data-theme="dark"]) table th {
@@ -2248,9 +2278,9 @@ html:not([data-theme="dark"]) .file-list {
 }
 html:not([data-theme="dark"]) .list-widget .list-item { padding: 13px 14px; }
 html:not([data-theme="dark"]) .list-widget .list-item.active {
-  background: #EAF3FC;
-  color: #205D9E;
-  box-shadow: inset 3px 0 0 #3C80C7;
+  background: color-mix(in srgb, var(--primary) 10%, white);
+  color: var(--primary-hover);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 html:not([data-theme="dark"]) .qb-section {
   padding: 19px;
@@ -2279,10 +2309,10 @@ html:not([data-theme="dark"]) .drop-zone {
 }
 html:not([data-theme="dark"]) .drop-zone:hover,
 html:not([data-theme="dark"]) .drop-zone.drag-over {
-  border-color: #3D7DBB;
-  background: #F2F7FC;
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, white);
 }
-html:not([data-theme="dark"]) .drop-zone .drop-icon { color: #3979B8; }
+html:not([data-theme="dark"]) .drop-zone .drop-icon { color: var(--primary); }
 html:not([data-theme="dark"]) .queue-summary > div { border-bottom-color: #E7EDF3; }
 html:not([data-theme="dark"]) .model-note,
 html:not([data-theme="dark"]) .processing-banner {
@@ -2302,7 +2332,7 @@ html:not([data-theme="dark"]) .log-box {
   background: #F8FAFC;
 }
 html:not([data-theme="dark"]) .progress-bar { height: 8px; background: #EAF0F6; }
-html:not([data-theme="dark"]) .progress-fill { background: linear-gradient(90deg, #3479BF, #52A382); }
+html:not([data-theme="dark"]) .progress-fill { background: linear-gradient(90deg, var(--progress-fill), var(--success)); }
 
 /* Review, results, reports, and long-form guidance share the same scan-friendly rhythm. */
 html:not([data-theme="dark"]) .action-bar {
@@ -2340,7 +2370,7 @@ html:not([data-theme="dark"]) .review-details > div {
   background: #F8FAFC;
 }
 html:not([data-theme="dark"]) .remarks-box {
-  border-left-color: #4D85C1;
+  border-left-color: var(--primary);
   border-radius: 0 10px 10px 0;
   background: #F5F9FD;
 }
@@ -2378,8 +2408,8 @@ html:not([data-theme="dark"]) .tab-btn.active {
   border-color: #E1E9F1;
   border-bottom-color: #FFFFFF;
   background: #FFFFFF;
-  color: #1F5F9F;
-  box-shadow: inset 0 3px 0 #3D7EC1;
+  color: var(--primary-hover);
+  box-shadow: inset 0 3px 0 var(--primary);
 }
 html:not([data-theme="dark"]) .tab-content {
   padding: 26px;
@@ -2389,7 +2419,7 @@ html:not([data-theme="dark"]) .tab-content {
 html:not([data-theme="dark"]) .preference-group {
   border-color: #E0E8F0;
   border-radius: 11px;
-  background: #FBFCFE;
+  background: var(--secondary-bg);
 }
 html:not([data-theme="dark"]) .template-summary { border-bottom-color: #E5ECF2; }
 html:not([data-theme="dark"]) .theme-swatch { border-radius: 12px; }
