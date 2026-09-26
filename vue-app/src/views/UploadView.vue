@@ -25,7 +25,7 @@
    before processing starts, regardless of which path produced it.
    ============================================================ */
 
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, markRaw, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
@@ -186,7 +186,12 @@ function normalizeEntry(file, source, relativePathOverride) {
   const lastModified = Number(file?.lastModified) || 0
   return {
     key: `${relativePath.toLowerCase()}|${size}|${lastModified}`,
-    file,
+    // markRaw: this sits inside the store's reactive uploadFiles array, and
+    // without it Vue deep-proxies the native File object too -- with folder
+    // uploads of dozens of multi-MB photos, that's dozens of Proxy-wrapped
+    // Files for no benefit (nothing ever reactively depends on a File's own
+    // properties changing; it's an immutable blob).
+    file: markRaw(file),
     name,
     size,
     type: String(file?.type || ''),
@@ -223,6 +228,9 @@ async function addFiles(incoming, source) {
   if (accepted.length) {
     const newGroups = source === 'Folder' ? groupByFolder(accepted) : chunkFlat(accepted)
     groups.value = [...groups.value, ...newGroups]
+    // Fire-and-forget: each thumbnail pops into its row as soon as it's
+    // ready rather than blocking the whole batch on the slowest one.
+    accepted.forEach(ensureThumb)
   }
 
   const messages = []
@@ -292,12 +300,14 @@ function openFilePicker(event) {
 }
 
 function clearQueue() {
+  groups.value.forEach((group) => group.pages.forEach(forgetThumb))
   groups.value = []
 }
 
 /* ---------------------------------------------------------- Review Groups */
 
 function removePage(groupIndex, pageIndex) {
+  forgetThumb(groups.value[groupIndex]?.pages[pageIndex])
   const next = groups.value.map((group, index) => {
     if (index !== groupIndex) return group
     return { ...group, pages: group.pages.filter((_, i) => i !== pageIndex) }
@@ -317,6 +327,14 @@ function displayGroupLabel(group, index) {
   return group.source === 'Camera' ? `Submission ${index + 1} (captured)` : `Submission ${index + 1}`
 }
 
+/* The "Move to..." dropdown on EVERY page row used to re-run
+   displayGroupLabel() over the WHOLE groups array inline in the template
+   -- O(groups x total pages) label calls on every re-render once a batch
+   has any real size. One shared, cached list instead: Vue only
+   recomputes it when `groups` itself changes, and every row's dropdown
+   just reuses the same array. */
+const groupOptions = computed(() => groups.value.map((g, i) => ({ key: g.key, label: displayGroupLabel(g, i) })))
+
 async function deleteGroup(groupIndex) {
   const group = groups.value[groupIndex]
   if (!group) return
@@ -325,6 +343,7 @@ async function deleteGroup(groupIndex) {
     `Remove "${displayGroupLabel(group, groupIndex)}" and its ${group.pages.length} page(s) from the queue?`,
   )
   if (!ok) return
+  group.pages.forEach(forgetThumb)
   groups.value = groups.value.filter((_, index) => index !== groupIndex)
 }
 
@@ -372,16 +391,72 @@ function swapPages(groupIndex, fromIndex, toIndex) {
    uploaded yet -- so previewing it needs no server round trip at all,
    just a local object URL. Cached per entry.key so re-rendering the
    list doesn't keep minting new URLs (and leaking memory) for the same
-   file; revoked on unmount so closing/leaving Upload frees them. */
+   file; revoked on unmount so closing/leaving Upload frees them.
+
+   Used only for the "click to preview full size" lightbox -- the list
+   row's own thumbnail uses thumbUrl() below instead, deliberately NOT
+   this, because a phone photo straight off an exam sheet is routinely
+   2-8MB (several thousand pixels per side). The .submission-thumb box
+   is 48x48 CSS pixels, but the browser still has to decode and hold
+   each one at full resolution to paint it there -- with a folder of
+   dozens of such photos all sitting in a scrollable list at once, that
+   decode/composite cost per scroll frame is what was making the queue
+   laggy, not the number of DOM nodes. */
 const previewUrlCache = new Map()
 function previewUrl(entry) {
   if (!entry) return ''
   if (!previewUrlCache.has(entry.key)) previewUrlCache.set(entry.key, URL.createObjectURL(entry.file))
   return previewUrlCache.get(entry.key)
 }
+
+/* Real downscaled thumbnails for the list rows. reactive(), not ref(), so
+   Map.set() calls are tracked the same way a plain object's property
+   writes would be -- a template reading thumbCache.get(key) re-renders
+   when that specific key is (later) set, without needing a whole-array
+   replacement to trigger it. createImageBitmap's own resizeWidth/Height
+   lets the browser's native decoder downsample directly (Chrome/Firefox
+   both support this) instead of this code ever allocating a full-
+   resolution canvas; the small canvas at the end only re-encodes the
+   already-small bitmap to a compact JPEG for the <img src>. */
+const THUMB_MAX_PX = 128 // 2x the 48px CSS box, for retina/high-DPI displays
+const thumbCache = reactive(new Map())
+
+async function ensureThumb(entry) {
+  if (!entry || thumbCache.has(entry.key)) return
+  thumbCache.set(entry.key, null) // claim it immediately so concurrent adds don't double-generate
+  try {
+    const bitmap = await createImageBitmap(entry.file)
+    const scale = Math.min(1, THUMB_MAX_PX / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.75))
+    thumbCache.set(entry.key, blob ? URL.createObjectURL(blob) : previewUrl(entry))
+  } catch {
+    // Decoding failed (corrupt/unsupported file) -- fall back to the real
+    // file's own object URL rather than leaving the row blank; the browser
+    // will show its own broken-image icon if that fails too.
+    thumbCache.set(entry.key, previewUrl(entry))
+  }
+}
+function thumbUrl(entry) {
+  return entry ? thumbCache.get(entry.key) : ''
+}
+function forgetThumb(entry) {
+  const url = entry && thumbCache.get(entry.key)
+  if (url) URL.revokeObjectURL(url)
+  if (entry) thumbCache.delete(entry.key)
+}
+
 onUnmounted(() => {
   for (const url of previewUrlCache.values()) URL.revokeObjectURL(url)
   previewUrlCache.clear()
+  for (const url of thumbCache.values()) {
+    if (url) URL.revokeObjectURL(url)
+  }
+  thumbCache.clear()
 })
 
 const previewEntry = ref(null)
@@ -448,7 +523,9 @@ function capturePage() {
   canvas.toBlob((blob) => {
     if (!blob) return
     const file = new File([blob], `capture-${Date.now()}-p${currentPageNo.value}.jpg`, { type: 'image/jpeg' })
-    capturedPages.value = [...capturedPages.value, normalizeEntry(file, 'Camera')]
+    const entry = normalizeEntry(file, 'Camera')
+    capturedPages.value = [...capturedPages.value, entry]
+    ensureThumb(entry)
   }, 'image/jpeg', 0.92)
 }
 
@@ -477,6 +554,18 @@ function doneCapturing() {
   if (capturedPages.value.length) finishStudent()
   closeCamera()
 }
+
+// Escape closes whichever of this page's own modals (Capture Live or
+// Image Preview) is open -- neither is one of DialogHost's toasts, so
+// that host's own Escape handler never sees them. Preview takes
+// priority since it can be opened on top of the camera modal.
+function onModalKeydown(event) {
+  if (event.key !== 'Escape') return
+  if (previewEntry.value) closePreview()
+  else if (cameraOpen.value) doneCapturing()
+}
+onMounted(() => document.addEventListener('keydown', onModalKeydown))
+onUnmounted(() => document.removeEventListener('keydown', onModalKeydown))
 
 async function proceed() {
   const keyId = store.selectedAnswerKeyId
@@ -667,12 +756,18 @@ async function proceed() {
             <div class="submission-pages">
               <div v-for="(entry, pageIndex) in group.pages" :key="entry.key" class="submission-page">
                 <img
-                  :src="previewUrl(entry)"
+                  v-if="thumbUrl(entry)"
+                  :src="thumbUrl(entry)"
                   :alt="`Preview of ${entry.name}`"
                   class="submission-thumb"
                   title="Click to preview full size"
+                  role="button"
+                  tabindex="0"
                   @click="openPreview(entry)"
+                  @keydown.enter.prevent="openPreview(entry)"
+                  @keydown.space.prevent="openPreview(entry)"
                 >
+                <span v-else class="submission-thumb submission-thumb-pending" aria-hidden="true"></span>
                 <select
                   class="submission-move-select"
                   :value="pageIndex"
@@ -693,12 +788,12 @@ async function proceed() {
                   <option :value="group.key" disabled>Move to...</option>
                   <option value="__new__">New submission</option>
                   <option
-                    v-for="(other, otherIndex) in groups"
-                    :key="other.key"
-                    :value="other.key"
-                    :disabled="other.key === group.key"
+                    v-for="opt in groupOptions"
+                    :key="opt.key"
+                    :value="opt.key"
+                    :disabled="opt.key === group.key"
                   >
-                    {{ displayGroupLabel(other, otherIndex) }}
+                    {{ opt.label }}
                   </option>
                 </select>
                 <button
@@ -735,8 +830,8 @@ async function proceed() {
 
     <!-- Capture Live modal -->
     <div v-if="cameraOpen" class="toast-overlay" @click.self="doneCapturing">
-      <div class="toast-box camera-box">
-        <div class="toast-title">Capture Live</div>
+      <div class="toast-box camera-box" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
+        <div id="camera-modal-title" class="toast-title">Capture Live</div>
 
         <div v-if="cameraError" class="muted-text mb-8">{{ cameraError }}</div>
         <template v-else>
@@ -764,11 +859,15 @@ async function proceed() {
             </button>
             <img
               v-if="lastCapturedPage"
-              :src="previewUrl(lastCapturedPage)"
+              :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
               alt="Last captured page"
               class="submission-thumb"
               title="Last captured page -- click to preview full size"
+              role="button"
+              tabindex="0"
               @click="openPreview(lastCapturedPage)"
+              @keydown.enter.prevent="openPreview(lastCapturedPage)"
+              @keydown.space.prevent="openPreview(lastCapturedPage)"
             >
           </div>
         </template>
@@ -784,8 +883,8 @@ async function proceed() {
 
     <!-- Image preview -- local blob URL only, nothing has been uploaded yet -->
     <div v-if="previewEntry" class="toast-overlay" @click.self="closePreview">
-      <div class="toast-box preview-box">
-        <div class="toast-title">{{ previewEntry.name }}</div>
+      <div class="toast-box preview-box" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
+        <div id="preview-modal-title" class="toast-title">{{ previewEntry.name }}</div>
         <img :src="previewUrl(previewEntry)" :alt="`Full preview of ${previewEntry.name}`" class="preview-image">
         <div class="toast-actions mt-14">
           <button class="btn btn-secondary" @click="closePreview">Close</button>
