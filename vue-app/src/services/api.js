@@ -307,6 +307,9 @@ export const API = {
     // from grading_result rows — so there is nothing to write here.
     return null
   },
+  async updateStudentIdentity(sheetId, name, section) {
+    return patch(`/sheets/${sheetId}/identity`, { name, section })
+  },
   async recalculateStudentResult(resultId) {
     // Same reasoning as updateStudentResult: nothing to recompute,
     // nothing to drift. Just hand back the current derived totals.
