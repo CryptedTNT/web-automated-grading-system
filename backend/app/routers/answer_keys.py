@@ -7,12 +7,12 @@ an id.
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import AnswerKey, AnswerKeyItem, Faculty
+from app.models import AnswerKey, AnswerKeyItem, Faculty, GradingSession
 from app.schemas import AnswerKeyCreateRequest, AnswerKeyUpdateRequest, ReplaceAnswerKeyItemsRequest
 from app.security import get_current_faculty
 from app.utils import QUESTION_TYPE_TO_LABEL, question_type_to_code
@@ -104,10 +104,13 @@ def delete_answer_key(key_id: int, faculty: Faculty = Depends(get_current_facult
         db.commit()
     except IntegrityError:
         db.rollback()
+        used_by = db.scalar(
+            select(func.count()).select_from(GradingSession).where(GradingSession.answer_key_id == key_id)
+        )
         raise HTTPException(
             status_code=409,
-            detail="Could not delete: this answer key has graded sessions, and their results are tied "
-            "to its items. Delete the session(s) that used it first, then delete this key.",
+            detail=f"Could not delete: {used_by} grading session(s) used this answer key, and their results "
+            "are tied to its items. Open Reports, delete those sessions, then delete this key.",
         )
 
 

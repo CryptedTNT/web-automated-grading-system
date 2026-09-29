@@ -44,7 +44,12 @@ function handleIfSessionExpired(res, path) {
 async function safeFetch(url, opts) {
   try {
     return await fetch(url, opts)
-  } catch {
+  } catch (error) {
+    // A deliberate abort (processing.js's cancel()) is not a network
+    // failure -- rethrown as-is so callers can tell "you cancelled this"
+    // apart from "the server is unreachable" instead of showing the
+    // generic message below for both.
+    if (error.name === 'AbortError') throw error
     throw new Error('Could not reach the server. Check that it is running and your internet connection is working, then try again.')
   }
 }
@@ -241,7 +246,7 @@ export const API = {
   async clearSession(sessionId) {
     await del(`/sessions/${sessionId}`)
   },
-  async uploadSheetGroup(sessionId, files, consentConfirmed) {
+  async uploadSheetGroup(sessionId, files, consentConfirmed, signal) {
     // Not part of database.js's surface -- there was no equivalent
     // concept when grading was a client-side placeholder. `files` is
     // every page of ONE student's submission, in page order (page 1
@@ -263,6 +268,7 @@ export const API = {
       method: 'POST',
       credentials: 'include',
       body: formData,
+      signal,
     })
     let data = null
     try {
