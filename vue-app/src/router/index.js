@@ -30,13 +30,15 @@ const routes = [
 
   // --- Application pages (rendered inside the shell) ---
   { path: '/dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: 'Dashboard' } },
-  { path: '/answer-key', name: 'answer_key', component: () => import('@/views/AnswerKeyView.vue'), meta: { title: 'Answer Keys' } },
+  { path: '/answer-key', name: 'answer_key', component: () => import('@/views/AnswerKeyView.vue'), meta: { title: 'Build a Questionnaire' } },
   { path: '/upload', name: 'upload', component: () => import('@/views/UploadView.vue'), meta: { title: 'Upload Sheets' } },
-  { path: '/processing', name: 'processing', component: () => import('@/views/ProcessingView.vue'), meta: { title: 'Processing' } },
+  { path: '/processing', name: 'processing', component: () => import('@/views/ProcessingView.vue'), meta: { title: 'Grade Answer Sheets' } },
   { path: '/results', name: 'results', component: () => import('@/views/ResultsView.vue'), meta: { title: 'Results' } },
+  { path: '/students', name: 'students', component: () => import('@/views/StudentsView.vue'), meta: { title: 'Students' } },
   { path: '/student-result', name: 'student_result', component: () => import('@/views/StudentResultView.vue'), meta: { title: 'Student Result' } },
   { path: '/review', name: 'review', component: () => import('@/views/ReviewView.vue'), meta: { title: 'Review Flagged' } },
   { path: '/reports', name: 'reports', component: () => import('@/views/ReportsView.vue'), meta: { title: 'Reports' } },
+  { path: '/exam-analysis', name: 'exam_analysis', component: () => import('@/views/ExamAnalysisView.vue'), meta: { title: 'Exam Analysis' } },
   { path: '/how-to-use', name: 'how_to_use', component: () => import('@/views/HowToUseView.vue'), meta: { title: 'How to Use' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue'), meta: { title: 'Settings' } },
 
