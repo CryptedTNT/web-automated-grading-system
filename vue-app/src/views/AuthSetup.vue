@@ -10,22 +10,24 @@ import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
-import { useAppStore } from '@/stores/app.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
 import PasswordRules from '@/components/PasswordRules.vue'
 import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const router = useRouter()
-const store = useAppStore()
 
 const PW_HINT = 'At least 8 characters, with a letter, a number, and a special character.'
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+// Restricting sign-up to this domain is IT-expert feedback: a teacher
+// account should only be issuable to the school's own email addresses,
+// so an outsider can't self-register. Confirm/replace with the real
+// domain LSPU issues to its faculty before relying on this.
+const ALLOWED_EMAIL_DOMAIN = 'lspu.edu.ph'
+const EMAIL_PATTERN = new RegExp(`^[^\\s@]+@([^\\s@]+\\.)?${ALLOWED_EMAIL_DOMAIN.replace(/\./g, '\\.')}$`, 'i')
 
 const form = reactive({
   fullname: '',
-  institution: '',
   username: '',
   password: '',
   confirm: '',
@@ -41,7 +43,7 @@ const clearInvalid = (key) => invalid.value.delete(key)
 
 const status = ref('Create a teacher account to get started.')
 
-const REQUIRED = ['fullname', 'institution', 'username', 'password', 'confirm', 'email']
+const REQUIRED = ['fullname', 'username', 'password', 'confirm', 'email']
 const blanks = computed(() => REQUIRED.filter((key) => !form[key].trim()))
 
 async function submit() {
@@ -53,7 +55,10 @@ async function submit() {
 
   if (!EMAIL_PATTERN.test(form.email.trim())) {
     invalid.value = new Set(['email'])
-    await showMessage('Invalid Email', 'Please enter a valid email address.')
+    await showMessage(
+      'Invalid Email',
+      `Please use your ${ALLOWED_EMAIL_DOMAIN} school email address to register.`,
+    )
     return
   }
 
@@ -77,9 +82,13 @@ async function submit() {
 
   let user
   try {
+    // Institution used to be collected here; it added a required field to sign-up
+    // without being needed to use the system, so it was dropped from onboarding
+    // (feedback from IT expert review). A teacher can still add it afterward from
+    // Settings > Account, where it stays optional -- see SettingsView.vue.
     user = await API.createUser(
       form.fullname,
-      form.institution,
+      null,
       form.username,
       form.password,
       form.email.trim(),
@@ -89,10 +98,13 @@ async function submit() {
     return
   }
 
-  // Registering also signs the account in server-side, so pick straight
-  // up where AuthLogin.vue would leave off and head into email verification.
-  await store.signIn(user)
-  router.push({ name: 'verify_email' })
+  // Send the teacher to log in with their new credentials rather than
+  // straight into the dashboard -- signing them in here too was one
+  // more thing to undo if createUser succeeded but something after it
+  // failed, and it skipped the moment of confirming the password works.
+  // AuthLogin.vue already has a 'created' status message and an autofilled
+  // username for exactly this handoff.
+  router.push({ name: 'login', query: { status: 'created', u: user.username || form.username } })
 }
 </script>
 
@@ -114,19 +126,6 @@ async function submit() {
           aria-label="Full name"
           :class="{ invalid: isInvalid('fullname') }"
           @input="clearInvalid('fullname')"
-        >
-      </div>
-
-      <div class="form-group">
-        <span class="form-label">Institution <span class="required">*</span></span>
-        <input
-          v-model="form.institution"
-          type="text"
-          placeholder="Institution"
-          title="Enter the school or institution name."
-          aria-label="Institution"
-          :class="{ invalid: isInvalid('institution') }"
-          @input="clearInvalid('institution')"
         >
       </div>
 
@@ -171,8 +170,8 @@ async function submit() {
         <input
           v-model="form.email"
           type="email"
-          placeholder="you@example.com"
-          title="Enter an email address. You'll verify it next, and it's needed to reset your password later."
+          :placeholder="`you@${ALLOWED_EMAIL_DOMAIN}`"
+          :title="`Enter your ${ALLOWED_EMAIL_DOMAIN} school email address. It's needed to reset your password later.`"
           aria-label="Email address"
           :class="{ invalid: isInvalid('email') }"
           @input="clearInvalid('email')"
@@ -195,7 +194,7 @@ async function submit() {
       <div class="muted-text">{{ status }}</div>
       <button
         class="btn btn-primary w-full"
-        title="Create the local teacher account and proceed to email verification."
+        title="Create the teacher account, then sign in with it."
         @click="submit"
       >
         Create Account
