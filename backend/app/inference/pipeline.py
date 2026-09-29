@@ -61,6 +61,7 @@ match despite a low reported score is still an exact match.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -72,8 +73,8 @@ from app.inference.grading import (
     grade_exact,
     grade_fuzzy,
     grade_multiple_choice,
+    best_item_similarity,
     match_enumeration_answers,
-    similarity,
 )
 
 MODEL_NAME = "YOLOv26n-seg + TrOCR-custom"
@@ -130,16 +131,37 @@ def _maybe_flag_low_confidence(verdict: GradeVerdict, confidence: float) -> Grad
     )
 
 
-def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_code: str) -> dict:
+class PipelineCancelled(Exception):
+    """run_sheet_group's should_stop callback reported that nobody wants
+    this submission's result any more."""
+
+
+def run_sheet_group(
+    image_paths: list[str],
+    items: list,
+    crop_dir: Path,
+    sheet_code: str,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict:
     """
     image_paths: this submission's page images, in page order (page 1
     first -- the only one expected to carry the Name/Section header).
     items: AnswerKeyItem ORM rows for this sheet's answer key.
+    should_stop: polled before every page detection and every crop
+    recognition; when it returns True the run raises PipelineCancelled
+    instead of finishing. On a CPU-only deployment a submission takes
+    minutes (one recognition is ~9 s on a single core), so without this
+    a cancelled submission kept the CPU busy long after the teacher
+    clicked Cancel.
     Returns {
       "identity": {"name": str|None, "section": str|None},
       "answers": [{"item_id", "crop_path", "recognized_text", "confidence", "verdict"}],
     }
     """
+    def check_stop() -> None:
+        if should_stop is not None and should_stop():
+            raise PipelineCancelled()
+
     # Pooled across every page, in page order -- see the module
     # docstring for why this keeps positional pairing correct across a
     # page break. Each entry carries its own source image since pages
@@ -150,6 +172,7 @@ def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_c
     identity_boxes: dict[str, tuple[Image.Image, Detection]] = {}
 
     for image_path in image_paths:
+        check_stop()
         image = Image.open(image_path)
         detections = detect_regions(image_path)
 
@@ -168,6 +191,7 @@ def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_c
     answers: list[dict] = []
 
     def recognize_and_save(image: Image.Image, det: Detection, item_id: int, suffix: str) -> tuple[str, float, str]:
+        check_stop()
         crop_img = _crop(image, det.bbox, det.polygon)
         crop_path = crop_dir / f"{sheet_code}_item{item_id}_{suffix}.png"
         crop_img.save(crop_path)  # saved as-is so the teacher can see any crossed-out writing
@@ -252,12 +276,13 @@ def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_c
         # correct answer -- but leaving them out of the results made the
         # unmatched rows look like nothing was detected and hid what the
         # student actually wrote. Show each one next to the unmatched slot it
-        # is closest to. Display only: those slots stay flagged, 0 points.
+        # is closest to. It is an incorrect answer when below that slot's
+        # threshold; only a missing region remains flagged for review.
         used_detected = {s.detected_index for s in match_result["per_slot"] if s.matched}
         leftovers = [i for i, t in enumerate(recognized_texts) if i not in used_detected and (t or "").strip()]
         candidates = sorted(
             (
-                (similarity(item.correct_answer, recognized_texts[i]), item.item_id, i)
+                (best_item_similarity(item, recognized_texts[i]), item.item_id, i)
                 for item in group_items
                 if not slot_by_item_id[item.item_id].matched
                 for i in leftovers
@@ -283,13 +308,24 @@ def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_c
             # an unrelated answer, or a "flagged" row next to text that
             # actually belongs to a different slot entirely.
             if slot.matched:
+                if slot.is_exact:
+                    verdict = GradeVerdict("correct", slot.earned, slot.match_score)
+                else:
+                    threshold = float(item.fuzzy_threshold or 85)
+                    verdict = GradeVerdict(
+                        "flagged",
+                        0.0,
+                        slot.match_score,
+                        f'Recognized "{slot.matched_answer}" is a {slot.match_score:.0f}% match for '
+                        f'"{item.correct_answer}". It meets the {threshold:.0f}% review threshold but is not exact.',
+                    )
                 answers.append(
                     {
                         "item_id": item.item_id,
                         "crop_path": crop_paths[slot.detected_index],
                         "recognized_text": slot.matched_answer,
                         "confidence": confidences[slot.detected_index],
-                        "verdict": GradeVerdict("correct", slot.earned, slot.match_score),
+                        "verdict": verdict,
                     }
                 )
             elif item.item_id in shown_for_slot:
@@ -302,11 +338,11 @@ def run_sheet_group(image_paths: list[str], items: list, crop_dir: Path, sheet_c
                         "recognized_text": recognized_texts[i],
                         "confidence": confidences[i],
                         "verdict": GradeVerdict(
-                            "flagged",
+                            "incorrect",
                             0.0,
                             score,
                             f'Recognized "{recognized_texts[i]}"; the closest answer-key entry for this slot is '
-                            f'"{item.correct_answer}" ({score:.0f}% match, below the {threshold:.0f}% threshold); needs review.',
+                            f'"{item.correct_answer}" ({score:.0f}% match, below the {threshold:.0f}% threshold).',
                         ),
                     }
                 )
