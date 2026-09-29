@@ -35,7 +35,8 @@ import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 const router = useRouter()
 const store = useAppStore()
 
-const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'])
+const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.heic', '.heif'])
+const HEIF_EXTENSIONS = new Set(['.heic', '.heif'])
 
 const fileInput = ref(null)
 const folderInput = ref(null)
@@ -158,6 +159,10 @@ function parentFolder(path) {
 function extension(name) {
   const index = String(name).lastIndexOf('.')
   return index >= 0 ? String(name).slice(index).toLowerCase() : ''
+}
+
+function isHeif(entry) {
+  return HEIF_EXTENSIONS.has(extension(entry?.name))
 }
 
 function formatBytes(bytes) {
@@ -283,9 +288,66 @@ function onFilePicked(event, source) {
   event.target.value = '' // let the same file be picked again
 }
 
-function onDrop(event) {
+function droppedFile(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject))
+}
+
+function readDirectoryEntries(reader) {
+  return new Promise((resolve, reject) => reader.readEntries(resolve, reject))
+}
+
+/* Dragging a folder does not put its children in dataTransfer.files. Chromium
+   exposes them through the legacy webkit entry API instead, including the
+   parent/child structure we need to keep each student's pages together.
+   Keep the old flat-file fallback below for browsers that do not provide it. */
+async function collectDroppedEntry(entry, relativePath = entry.name) {
+  if (entry.isFile) {
+    const file = await droppedFile(entry)
+    return [{ file, relativePath }]
+  }
+  if (!entry.isDirectory) return []
+
+  const reader = entry.createReader()
+  const collected = []
+  let batch = []
+  do {
+    batch = await readDirectoryEntries(reader)
+    for (const child of batch) {
+      collected.push(...(await collectDroppedEntry(child, `${relativePath}/${child.name}`)))
+    }
+  } while (batch.length)
+  return collected
+}
+
+async function collectDroppedFiles(dataTransfer) {
+  const items = Array.from(dataTransfer?.items || [])
+  const entries = items
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter(Boolean)
+
+  if (!entries.length) {
+    return { files: Array.from(dataTransfer?.files || []), hasFolder: false }
+  }
+
+  const files = []
+  for (const entry of entries) {
+    files.push(...(await collectDroppedEntry(entry)))
+  }
+  return { files, hasFolder: entries.some((entry) => entry.isDirectory) }
+}
+
+async function onDrop(event) {
   dragOver.value = false
-  addFiles(Array.from(event.dataTransfer?.files || []), 'Drop')
+  try {
+    const dropped = await collectDroppedFiles(event.dataTransfer)
+    await addFiles(dropped.files, dropped.hasFolder ? 'Folder' : 'Drop')
+  } catch (error) {
+    await showMessage(
+      'Could Not Read Dropped Folder',
+      error.message || 'Try Browse Folder instead, then select the class folder.',
+    )
+  }
 }
 
 function onDragLeave(event) {
@@ -388,10 +450,12 @@ function swapPages(groupIndex, fromIndex, toIndex) {
 /* ------------------------------------------------------- Image preview */
 
 /* Every page here is still just a local File/Blob -- nothing has been
-   uploaded yet -- so previewing it needs no server round trip at all,
-   just a local object URL. Cached per entry.key so re-rendering the
-   list doesn't keep minting new URLs (and leaking memory) for the same
-   file; revoked on unmount so closing/leaving Upload frees them.
+   uploaded yet. Normal images use a local object URL. HEIC/HEIF is not
+   decodable by Chrome on Windows, so it is converted to a JPEG in the
+   browser first; the original HEIC file remains untouched in entry.file
+   and is still what gets sent to the server for its own safe conversion.
+   URLs are cached per entry.key and released when the page leaves the
+   queue or this view unmounts.
 
    Used only for the "click to preview full size" lightbox -- the list
    row's own thumbnail uses thumbUrl() below instead, deliberately NOT
@@ -420,12 +484,50 @@ function previewUrl(entry) {
    already-small bitmap to a compact JPEG for the <img src>. */
 const THUMB_MAX_PX = 128 // 2x the 48px CSS box, for retina/high-DPI displays
 const thumbCache = reactive(new Map())
+const previewErrorCache = reactive(new Map())
+
+// This is deliberately dynamic: the HEIC WebAssembly decoder is only loaded
+// by someone who actually selects a HEIC/HEIF photo, rather than increasing
+// the initial download for every teacher using ordinary JPG scans.
+let heifDecoderPromise = null
+async function heifDecoder() {
+  if (!heifDecoderPromise) {
+    heifDecoderPromise = import('heic2any').then((module) => module.default)
+  }
+  return heifDecoderPromise
+}
+
+async function previewSource(entry) {
+  if (!isHeif(entry)) return entry.file
+
+  // Safari and some newer devices can already decode HEIC. Prefer that
+  // native route when it works; Chrome/Windows reaches the converter below.
+  try {
+    const bitmap = await createImageBitmap(entry.file)
+    bitmap.close()
+    return entry.file
+  } catch {
+    const convertHeif = await heifDecoder()
+    const converted = await convertHeif({
+      blob: entry.file,
+      toType: 'image/jpeg',
+      quality: 0.9,
+    })
+    const firstImage = Array.isArray(converted) ? converted[0] : converted
+    if (!(firstImage instanceof Blob)) throw new Error('The HEIC preview converter returned no image.')
+    return firstImage
+  }
+}
 
 async function ensureThumb(entry) {
   if (!entry || thumbCache.has(entry.key)) return
   thumbCache.set(entry.key, null) // claim it immediately so concurrent adds don't double-generate
+  previewErrorCache.delete(entry.key)
   try {
-    const bitmap = await createImageBitmap(entry.file)
+    const source = await previewSource(entry)
+    if (!previewUrlCache.has(entry.key)) previewUrlCache.set(entry.key, URL.createObjectURL(source))
+
+    const bitmap = await createImageBitmap(source)
     const scale = Math.min(1, THUMB_MAX_PX / Math.max(bitmap.width, bitmap.height))
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(bitmap.width * scale))
@@ -434,21 +536,48 @@ async function ensureThumb(entry) {
     bitmap.close()
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.75))
     thumbCache.set(entry.key, blob ? URL.createObjectURL(blob) : previewUrl(entry))
-  } catch {
+  } catch (error) {
     // Decoding failed (corrupt/unsupported file) -- fall back to the real
-    // file's own object URL rather than leaving the row blank; the browser
-    // will show its own broken-image icon if that fails too.
-    thumbCache.set(entry.key, previewUrl(entry))
+    // file's own object URL for ordinary image formats. A HEIC object URL is
+    // unreadable in Chromium, so show an honest fallback label instead of a
+    // broken-image icon; the original can still be uploaded and converted by
+    // the backend.
+    if (isHeif(entry)) {
+      thumbCache.delete(entry.key)
+      previewErrorCache.set(entry.key, error?.message || 'HEIC preview could not be created.')
+    } else {
+      thumbCache.set(entry.key, previewUrl(entry))
+    }
   }
 }
 function thumbUrl(entry) {
   return entry ? thumbCache.get(entry.key) : ''
 }
-function forgetThumb(entry) {
-  const url = entry && thumbCache.get(entry.key)
-  if (url) URL.revokeObjectURL(url)
-  if (entry) thumbCache.delete(entry.key)
+function previewError(entry) {
+  return entry ? previewErrorCache.get(entry.key) : ''
 }
+function forgetThumb(entry) {
+  if (!entry) return
+  const thumb = thumbCache.get(entry.key)
+  const preview = previewUrlCache.get(entry.key)
+  if (thumb) URL.revokeObjectURL(thumb)
+  if (preview && preview !== thumb) URL.revokeObjectURL(preview)
+  thumbCache.delete(entry.key)
+  previewUrlCache.delete(entry.key)
+  previewErrorCache.delete(entry.key)
+}
+
+// Thumbnails/preview URLs are local component state, torn down in
+// onUnmounted below -- but `groups` (the upload queue) lives in the Pinia
+// store and survives navigating to another page and back. Without this,
+// leaving Upload Sheets and returning left every already-queued page's
+// thumbnail permanently blank and unclickable: thumbCache was wiped on
+// unmount, and nothing ever repopulated it for pages that were already in
+// the queue before this component remounted (ensureThumb was only ever
+// called at the moment a file was first added).
+onMounted(() => {
+  groups.value.forEach((group) => group.pages.forEach(ensureThumb))
+})
 
 onUnmounted(() => {
   for (const url of previewUrlCache.values()) URL.revokeObjectURL(url)
@@ -457,6 +586,7 @@ onUnmounted(() => {
     if (url) URL.revokeObjectURL(url)
   }
   thumbCache.clear()
+  previewErrorCache.clear()
 })
 
 const previewEntry = ref(null)
@@ -570,12 +700,12 @@ onUnmounted(() => document.removeEventListener('keydown', onModalKeydown))
 async function proceed() {
   const keyId = store.selectedAnswerKeyId
   if (!keyId) {
-    await showMessage('Answer Key Required', 'Select or create an answer key before processing.')
+    await showMessage('Questionnaire Required', 'Select or build a questionnaire before grading.')
     return
   }
   const items = await API.answerKeyItems(keyId)
   if (!items.length) {
-    await showMessage('Answer Key Is Empty', 'Add at least one valid item to the selected answer key.')
+    await showMessage('Questionnaire Is Empty', 'Add at least one valid question to the selected questionnaire.')
     return
   }
   if (!groups.value.length) {
@@ -612,7 +742,7 @@ async function proceed() {
         <div class="card-title">Upload Setup</div>
 
         <div class="form-group">
-          <label class="form-label" for="upload-key-combo">Answer Key</label>
+          <label class="form-label" for="upload-key-combo">Questionnaire</label>
           <select id="upload-key-combo" v-model="selectedKeyId">
             <option v-if="!answerKeys.length" :value="null">No answer keys available</option>
             <option v-for="key in answerKeys" :key="key.id" :value="key.id">{{ key.name }}</option>
@@ -636,7 +766,7 @@ async function proceed() {
           class="btn btn-secondary w-full mb-14"
           @click="router.push({ name: 'answer_key' })"
         >
-          Create Answer Key
+          Build a Questionnaire
         </button>
 
         <div class="queue-summary" aria-label="Upload queue summary">
@@ -649,7 +779,7 @@ async function proceed() {
         <div class="model-note mt-14">
           <span class="badge badge-blue">Automated Grading</span>
           <p>
-            Each submission is graded automatically when processing runs; low-confidence answers are flagged for review.
+            Each submission is graded automatically when grading runs; low-confidence answers are flagged for review.
           </p>
         </div>
       </aside>
@@ -662,7 +792,7 @@ async function proceed() {
           :class="{ 'drag-over': dragOver }"
           role="button"
           tabindex="0"
-          aria-label="Choose or drop answer sheet images"
+          aria-label="Choose or drop answer sheet images or folders"
           @click="openFilePicker"
           @keydown.enter.prevent="fileInput?.click()"
           @keydown.space.prevent="fileInput?.click()"
@@ -671,8 +801,9 @@ async function proceed() {
           @drop.prevent="onDrop"
         >
           <div class="drop-icon" aria-hidden="true">+</div>
-          <div class="drop-text">Drop answer sheet images here</div>
-          <div class="muted-text">JPG, JPEG, PNG, BMP, TIF, and TIFF</div>
+          <div class="drop-text">Drop answer sheet images or folders here</div>
+          <div class="muted-text">Drop a class folder to keep student subfolders together.</div>
+          <div class="muted-text">JPG, JPEG, PNG, BMP, TIF, TIFF, HEIC, and HEIF</div>
           <div class="flex gap-8 flex-wrap justify-center">
             <button type="button" class="btn btn-primary" @click.stop="fileInput?.click()">
               Browse Images
@@ -695,7 +826,7 @@ async function proceed() {
             ref="fileInput"
             type="file"
             multiple
-            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff"
+            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
             @change="onFilePicked($event, 'Images')"
           >
@@ -705,7 +836,7 @@ async function proceed() {
             multiple
             webkitdirectory
             directory
-            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff"
+            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
             @change="onFilePicked($event, 'Folder')"
           >
@@ -731,7 +862,7 @@ async function proceed() {
 
         <div class="submission-groups">
           <div v-if="!groups.length" class="file-empty">
-            Choose images, a folder, or capture live to build the processing queue.
+            Choose images, drop a folder, or capture live to build the grading queue.
           </div>
 
           <div
@@ -755,8 +886,14 @@ async function proceed() {
 
             <div class="submission-pages">
               <div v-for="(entry, pageIndex) in group.pages" :key="entry.key" class="submission-page">
+                <span
+                  v-if="previewError(entry)"
+                  class="submission-thumb submission-thumb-heif"
+                  :title="`${entry.name}: ${previewError(entry)} It can still be processed after upload.`"
+                  aria-label="HEIC or HEIF page selected; local preview could not be created"
+                >HEIC</span>
                 <img
-                  v-if="thumbUrl(entry)"
+                  v-else-if="thumbUrl(entry)"
                   :src="thumbUrl(entry)"
                   :alt="`Preview of ${entry.name}`"
                   class="submission-thumb"
@@ -822,7 +959,7 @@ async function proceed() {
 
         <div class="workflow-actions">
           <button type="button" class="btn btn-primary" :disabled="!consentConfirmed" @click="proceed">
-            Proceed to Processing
+            Continue to Grade Papers
           </button>
         </div>
       </section>
