@@ -21,7 +21,7 @@ const QUESTION_TYPES = [
   { type: 'Multiple Choice', entry: 'Use A, B, C, or D.', behavior: 'Checked by exact matching.' },
   { type: 'True or False', entry: 'Use True/False or T/F.', behavior: 'Checked by exact matching.' },
   { type: 'Identification', entry: 'Use the exact expected text answer.', behavior: '100% is correct; 70–99% is flagged for review.' },
-  { type: 'Enumeration', entry: 'Use the same group number for answers that belong to one enumeration question.', behavior: 'Order does not matter within the same group.' },
+  { type: 'Enumeration', entry: 'Use the same group number for answers that belong to one enumeration question.', behavior: 'Order does not matter. Exact answers are correct; close matches at the configured threshold are flagged; lower matches are incorrect.' },
 ]
 
 const SHORTCUTS = [
@@ -90,7 +90,7 @@ const SHORTCUTS = [
         <div class="card-title">Important Notes</div>
         <div class="muted-text" style="line-height:1.8;">
           • Flagged answers require teacher review because the recognized answer is close but not exact.<br>
-          • For Identification and Enumeration, only a 100% match is automatically marked OK; 70–99% is flagged.<br>
+          • For Identification and Enumeration, only a 100% match is automatically marked OK; a close match at its configured threshold is flagged, while a lower match is incorrect.<br>
           • If OCR accuracy is low, check the crop/result first before assuming the student answer is wrong.<br>
           • Always review the Excel report before using it as the final class record.
         </div>

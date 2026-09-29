@@ -11,6 +11,8 @@ import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import { exportSessionToFile } from '@/services/export.js'
 import { formatDateTime } from '@/services/datetime.js'
+import { sessionLabel, sessionTag, refreshSessionNumbers } from '@/services/sessionNumbers.js'
+import { canonicalSection, loadAllGradedRecords, searchRecords } from '@/services/studentDirectory.js'
 
 const router = useRouter()
 const store = useAppStore()
@@ -25,6 +27,7 @@ const section = ref('All Sections')
 const sessions = ref([])
 async function loadSessions() {
   sessions.value = await API.sessions()
+  refreshSessionNumbers(sessions.value)
 }
 
 /* Mirrors the guard at the top of the original refresh(): if the
@@ -66,7 +69,7 @@ async function refresh() {
 }
 
 const sections = computed(() =>
-  [...new Set(rows.value.map((row) => String(row.section || '').trim()).filter(Boolean))].sort(),
+  [...new Set(rows.value.map((row) => canonicalSection(row.section)).filter(Boolean))].sort(),
 )
 
 /* A section filter that no longer exists in this session must not
@@ -80,13 +83,13 @@ watch(sections, (list) => {
 const filteredRows = computed(() => {
   const needle = query.value.trim().toLowerCase()
   return rows.value.filter((row) => {
-    if (section.value !== 'All Sections' && String(row.section || '') !== section.value) {
+    if (section.value !== 'All Sections' && canonicalSection(row.section) !== section.value) {
       return false
     }
     if (!needle) return true
     return [
       row.student_name,
-      row.section,
+      canonicalSection(row.section),
       row.status,
       row.score,
       row.total,
@@ -141,41 +144,55 @@ const sessionId = computed({
 })
 
 /* ---------- Global search ---------- */
-/* Replaces applySearch(): the top-bar box jumps to whichever session
-   contains a match before filtering within it. Sequential per-session
-   lookups (not Promise.all) since a match on the first session should
-   stop the search there, same as the original .find(). */
-async function jumpToMatchingSession(value) {
-  query.value = String(value || '')
-  const needle = query.value.trim().toLowerCase()
-  if (!needle) return
+/* A name match should surface every one of that student's past records,
+   not just the first session containing one -- a teacher looking up a
+   student wants their whole history, not a single exam picked for them.
+   So a non-empty query searches every session's results (not just the
+   currently-selected one) and lists every matching row, tagged with its
+   own session, instead of jumping into one session and filtering it. */
+const searching = computed(() => query.value.trim().length > 0)
+const crossSessionMatches = ref([])
+const searchLoading = ref(false)
 
-  for (const sessionRow of sessions.value) {
-    let isMatch = String(sessionRow.answer_key_name || '').toLowerCase().includes(needle)
-    if (!isMatch) {
-      const results = await API.studentResults(sessionRow.id)
-      isMatch = results.some((row) =>
-        [row.student_name, row.section, row.status].join(' ').toLowerCase().includes(needle),
-      )
-    }
-    if (isMatch) {
-      store.currentSessionId = sessionRow.id
-      store.selectedStudentResultId = null
-      return
-    }
+async function runCrossSessionSearch(value) {
+  query.value = String(value || '')
+  const needle = query.value.trim()
+  if (!needle) {
+    crossSessionMatches.value = []
+    return
+  }
+
+  searchLoading.value = true
+  try {
+    const records = await loadAllGradedRecords()
+    const matches = searchRecords(records, needle)
+    // Most recent exam first, so a student's latest record is easiest to find.
+    matches.sort((a, b) => new Date(b.session.created_at) - new Date(a.session.created_at))
+    crossSessionMatches.value = matches
+  } finally {
+    searchLoading.value = false
   }
 }
 
-watch(() => store.searchTerm, jumpToMatchingSession)
+watch(() => store.searchTerm, runCrossSessionSearch)
+watch(query, (value) => {
+  if (value !== store.searchTerm) runCrossSessionSearch(value)
+})
 
 /* Typing in the top bar sets searchTerm and *then* routes here, so on
-   arrival the watcher above has already missed its edge. Run the jump
+   arrival the watcher above has already missed its edge. Run the search
    once for the term we were mounted with — after sessions have loaded,
-   since jumpToMatchingSession needs `sessions.value` populated. */
+   since it needs `sessions.value` populated. */
 onMounted(async () => {
   await loadSessions()
-  if (store.searchTerm.trim()) await jumpToMatchingSession(store.searchTerm)
+  if (store.searchTerm.trim()) await runCrossSessionSearch(store.searchTerm)
 })
+
+function openMatch(match) {
+  store.currentSessionId = match.session.id
+  store.selectedStudentResultId = match.id
+  router.push({ name: 'student_result' })
+}
 
 /* ---------- Actions ---------- */
 async function openSelected() {
@@ -220,7 +237,7 @@ function toNumber(value) {
       <div class="page-title">Grading Results</div>
       <div class="page-subtitle">
         <template v-if="currentSession">
-          Session #{{ currentSession.id }} - {{ currentSession.answer_key_name }} -
+          {{ sessionLabel(currentSession.id) }} - {{ currentSession.answer_key_name }} -
           {{ currentSession.status }}
         </template>
         <template v-else>No grading session is available.</template>
@@ -235,24 +252,69 @@ function toNumber(value) {
         aria-label="Search results"
       >
 
-      <select v-model="sessionId" aria-label="Select grading session">
+      <select v-if="!searching" v-model="sessionId" aria-label="Select grading session">
         <option v-if="!sessions.length" :value="null">No sessions available</option>
         <option v-for="session in sessions" :key="session.id" :value="session.id">
-          #{{ session.id }} - {{ formatDateTime(session.created_at) }} - {{ session.answer_key_name || 'No key' }}
+          {{ sessionTag(session.id) }} - {{ formatDateTime(session.created_at) }} - {{ session.answer_key_name || 'No key' }}
         </option>
       </select>
 
-      <select v-model="section" aria-label="Filter by section">
+      <select v-if="!searching" v-model="section" aria-label="Filter by section">
         <option>All Sections</option>
         <option v-for="name in sections" :key="name">{{ name }}</option>
       </select>
 
       <div class="spacer"></div>
-      <button class="btn btn-secondary" @click="refresh">Refresh</button>
-      <button class="btn btn-success" @click="exportSession">Export Session</button>
+      <button v-if="!searching" class="btn btn-secondary" @click="refresh">Refresh</button>
+      <button v-if="!searching" class="btn btn-success" @click="exportSession">Export Session</button>
     </div>
 
-    <section class="card">
+    <!-- Searching: every matching record across every session, not just the
+         currently-selected one -- a student's whole history in one place. -->
+    <section v-if="searching" class="card">
+      <div class="results-summary">
+        <span><strong>{{ crossSessionMatches.length }}</strong> matching record(s) across all sessions</span>
+        <span v-if="searchLoading" class="muted-text">Searching...</span>
+      </div>
+
+      <div class="table-wrapper results-table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Session</th><th>Date</th><th>Answer Key</th><th>Student Name</th>
+              <th>Section</th><th>Score</th><th>% Score</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="match in crossSessionMatches"
+              :key="match.id"
+              tabindex="0"
+              @click="openMatch(match)"
+              @keydown.enter="openMatch(match)"
+            >
+              <td>{{ sessionTag(match.session.id) }}</td>
+              <td>{{ formatDateTime(match.session.created_at) }}</td>
+              <td>{{ match.session.answer_key_name || 'No key' }}</td>
+              <td>{{ match.student_name || 'Unknown' }}</td>
+              <td>{{ canonicalSection(match.section) }}</td>
+              <td>{{ toNumber(match.score) }} / {{ toNumber(match.total) }}</td>
+              <td>{{ toNumber(match.percentage) }}%</td>
+              <td>
+                <span class="badge" :class="statusClass(match.status)">
+                  {{ match.status || 'Unknown' }}
+                </span>
+              </td>
+            </tr>
+            <tr v-if="!searchLoading && !crossSessionMatches.length">
+              <td colspan="8" class="table-empty">No records match this search.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-else class="card">
       <div class="results-summary">
         <span><strong>{{ rows.length }}</strong> student record(s)</span>
         <span><strong>{{ flaggedTotal }}</strong> flagged item(s)</span>
@@ -279,7 +341,7 @@ function toNumber(value) {
             >
               <td>{{ index + 1 }}</td>
               <td>{{ row.student_name || 'Unknown' }}</td>
-              <td>{{ row.section || '' }}</td>
+              <td>{{ canonicalSection(row.section) }}</td>
               <td>{{ toNumber(row.score) }} / {{ toNumber(row.total) }}</td>
               <td>{{ toNumber(row.percentage) }}%</td>
               <td>{{ toNumber(row.flagged_count) }}</td>

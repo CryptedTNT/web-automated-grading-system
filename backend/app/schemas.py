@@ -29,6 +29,22 @@ def _validate_email_format(value: str) -> str:
     return value
 
 
+# IT-expert review feedback: registration should be restricted to the
+# school's own email domain so an outsider can't self-register a teacher
+# account. AuthSetup.vue checks this too, but a frontend-only check is
+# exactly the gap _validate_password_strength's docstring below already
+# warns about -- anyone can bypass it by posting straight to this endpoint,
+# so it has to be enforced here as well, not just in the browser.
+ALLOWED_EMAIL_DOMAIN = "lspu.edu.ph"
+
+
+def _validate_school_email_domain(value: str) -> str:
+    domain = value.rsplit("@", 1)[-1].lower()
+    if domain != ALLOWED_EMAIL_DOMAIN and not domain.endswith(f".{ALLOWED_EMAIL_DOMAIN}"):
+        raise ValueError(f"Please use your {ALLOWED_EMAIL_DOMAIN} school email address.")
+    return value
+
+
 def _validate_password_strength(value: str) -> str:
     # Mirrors vue-app/src/services/api.js's PASSWORD_RULES exactly -- that
     # check was frontend-only, so posting straight to /api/auth/register
@@ -54,6 +70,7 @@ class RegisterRequest(BaseModel):
     email: str = Field(max_length=255)
 
     _check_email = field_validator("email")(_validate_email_format)
+    _check_email_domain = field_validator("email")(_validate_school_email_domain)
     _check_password = field_validator("password")(_validate_password_strength)
 
 
@@ -70,6 +87,10 @@ class UpdateEmailRequest(BaseModel):
     email: str = Field(max_length=255)
 
     _check_email = field_validator("email")(_validate_email_format)
+    # Same domain rule as registration -- otherwise a teacher could sign
+    # up with a valid school email and immediately change it to anything
+    # here, making the registration-time check pointless.
+    _check_email_domain = field_validator("email")(_validate_school_email_domain)
 
 
 class ForgotSendCodeRequest(BaseModel):
@@ -141,6 +162,26 @@ class ReviewRequest(BaseModel):
     action: str = Field(pattern="^(accepted_correct|marked_incorrect|manual_answer_override)$")
     corrected_answer: str | None = None
     review_seconds: int | None = None
+
+
+class UpdateStudentIdentityRequest(BaseModel):
+    """Teacher correction for the OCR-derived identity on one submission.
+
+    Both fields travel together: a teacher can change just one by leaving
+    the other field as shown.  Requiring nonblank values avoids turning a
+    graded submission into an unfindable, anonymous record by mistake.
+    """
+
+    name: str = Field(min_length=1, max_length=150)
+    section: str = Field(min_length=1, max_length=50)
+
+    @field_validator("name", "section")
+    @classmethod
+    def _nonblank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank.")
+        return value
 
 
 class SetSettingRequest(BaseModel):

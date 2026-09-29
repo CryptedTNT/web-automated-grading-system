@@ -11,7 +11,15 @@
 
 your-domain.com {
 	root * /opt/ags/vue-app/dist
-	encode gzip
+	encode zstd gzip
+
+	# Vite names every built file after its content (index-BSiHQo4L.js), so a file under /assets never
+	# changes under the same name and browsers may keep it for a year. index.html is the one file that
+	# must be re-checked every time, or a new deploy would not be picked up.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@shell path / /index.html
+	header @shell Cache-Control "no-cache"
 
 	# Same idea as vite.config.js's dev-time proxy, just done by Caddy in
 	# production instead of Vite -- keeps the browser's view of everything

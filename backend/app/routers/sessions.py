@@ -5,6 +5,8 @@ See INTEGRATION_CONTRACT.md sections 4 "Sessions and processing" and 5
 
 import asyncio
 import datetime
+import logging
+import shutil
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -13,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.image_formats import ImageFormatError, SUPPORTED_IMAGE_EXTENSIONS, heif_to_jpeg, is_heif_filename
 from app.inference import pipeline as inference_pipeline
 from app.models import (
     AnswerKey,
@@ -28,9 +31,35 @@ from app.models import (
 )
 from app.schemas import CreateSessionRequest, UpdateSessionStatusRequest
 from app.security import get_current_faculty
+from app.sections import canonical_section
 from app.utils import SESSION_STATUS_TO_CODE, SESSION_STATUS_TO_LABEL, make_sheet_code
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+# uvicorn's own logger, so these lines show up in `journalctl -u ags-backend`
+# without any extra logging configuration (an app-named logger would be
+# dropped: nothing configures handlers or a level for it).
+logger = logging.getLogger("uvicorn.error")
+
+# Sessions the teacher cancelled. The Processing page's Cancel button aborts
+# its in-flight upload and then PATCHes the session to 'Cancelled'; recording
+# that here is what lets a submission that is ALREADY being graded stop at
+# its next checkpoint (see pipeline.run_sheet_group's should_stop) instead of
+# grinding on for minutes on a CPU-only server. In memory is enough: the
+# deployment is a single uvicorn process, and a cancelled session is never
+# resumed (Restart Processing always creates a new session).
+#
+# Deliberately NOT keyed off the HTTP connection closing: Azure's public IP
+# drops idle connections after 4 minutes by default, and a submission can
+# legitimately take longer than that -- a dropped connection must not throw
+# away a sheet that is about to finish.
+_cancelled_sessions: set[int] = set()
+
+# Sessions with an upload request being handled right now (saving its pages
+# or grading them), as a count per session id. A session must not be deleted
+# out from under that work, so clear_session() refuses while this is non-empty
+# for its id.
+_uploads_in_flight: dict[int, int] = {}
 
 # A phone photo or flatbed scan of one page is a few MB at most; this is
 # generous headroom above that. Uploads have no size limit otherwise --
@@ -69,6 +98,43 @@ def _safe_filename(name: str | None, fallback: str = "sheet.jpg") -> str:
     return candidate if candidate and candidate not in (".", "..") else fallback
 
 
+def _remove_session_files(session_id: int) -> None:
+    """Removes every uploaded page and crop belonging to one discarded run."""
+    for root in (settings.upload_dir, settings.crop_dir):
+        shutil.rmtree(root / f"session_{session_id}", ignore_errors=True)
+
+
+def _discard_cancelled_session_if_idle(session_id: int, db: Session) -> bool:
+    """Deletes a cancelled run once no upload handler can still be using it.
+
+    Cancelling means the teacher does not want a grading session at all. A
+    completed earlier submission must not leave a partial run in Reports or
+    consume a visible session number. The active upload is allowed to reach
+    its cancellation checkpoint first; its ``finally`` block calls this
+    helper after the in-flight counter reaches zero.
+    """
+    if _uploads_in_flight.get(session_id, 0):
+        return False
+    # populate_existing=True: this `db` is the SAME Session object that
+    # loaded this row earlier in the request (_owned_session, above), before
+    # the PATCH that set status='cancelled' committed on a DIFFERENT request's
+    # Session. Without it, db.get() returns that stale cached object -- its
+    # .status still reads whatever it was when THIS request first loaded it,
+    # so this always fell through here without ever discarding: verified by
+    # a real cancel-after-partial-success run that graded one sheet, patched
+    # the session to Cancelled while a second sheet was mid-grading, and
+    # confirmed the row and its files were still on disk afterward.
+    session = db.get(GradingSession, session_id, populate_existing=True)
+    if not session or session.status != "cancelled":
+        return False
+    db.delete(session)  # sheets, answers and grading rows cascade
+    db.commit()
+    _cancelled_sessions.discard(session_id)
+    _remove_session_files(session_id)
+    logger.info("Cancelled session %s discarded with its partial results", session_id)
+    return True
+
+
 def _owned_session(session_id: int, faculty: Faculty, db: Session) -> GradingSession:
     gs = db.scalar(
         select(GradingSession).where(
@@ -84,7 +150,10 @@ def _owned_session(session_id: int, faculty: Faculty, db: Session) -> GradingSes
 def list_sessions(faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
     rows = db.scalars(
         select(VSessionSummary)
-        .where(VSessionSummary.faculty_id == faculty.faculty_id)
+        .where(
+            VSessionSummary.faculty_id == faculty.faculty_id,
+            VSessionSummary.status != "cancelled",
+        )
         .order_by(VSessionSummary.session_id.desc())
     )
     return [_session_shape(r) for r in rows]
@@ -130,16 +199,28 @@ def update_session_status(
     gs.status = SESSION_STATUS_TO_CODE.get(body.status, body.status.lower())
     if gs.status in ("completed", "cancelled", "failed"):
         gs.finished_at = datetime.datetime.utcnow()
+    if gs.status == "cancelled":
+        _cancelled_sessions.add(session_id)
     db.add(gs)
     db.commit()
-    return {"ok": True}
+    discarded = _discard_cancelled_session_if_idle(session_id, db) if gs.status == "cancelled" else False
+    return {"ok": True, "discarded": discarded}
 
 
 @router.delete("/{session_id}", status_code=204)
 def clear_session(session_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
     gs = _owned_session(session_id, faculty, db)
+    if _uploads_in_flight.get(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This session is still grading a submission. Cancel it on the Processing page, "
+            "wait a few seconds for it to stop, then delete it.",
+        )
     db.delete(gs)  # sheets, answers, results cascade (fk_sheet_session ON DELETE CASCADE)
     db.commit()
+    _cancelled_sessions.discard(session_id)
+    # The database cascade does not cover page photos and answer crops.
+    _remove_session_files(session_id)
 
 
 @router.post("/{session_id}/sheets", status_code=201)
@@ -149,6 +230,26 @@ async def upload_sheets(
     consent_confirmed: bool = Form(False),
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
+):
+    """Grades one student's submission -- see _grade_submission."""
+    _uploads_in_flight[session_id] = _uploads_in_flight.get(session_id, 0) + 1
+    try:
+        return await _grade_submission(session_id, files, consent_confirmed, faculty, db)
+    finally:
+        remaining = _uploads_in_flight.get(session_id, 1) - 1
+        if remaining > 0:
+            _uploads_in_flight[session_id] = remaining
+        else:
+            _uploads_in_flight.pop(session_id, None)
+            _discard_cancelled_session_if_idle(session_id, db)
+
+
+async def _grade_submission(
+    session_id: int,
+    files: list[UploadFile],
+    consent_confirmed: bool,
+    faculty: Faculty,
+    db: Session,
 ):
     """One transaction PER SUBMISSION (V006), per INTEGRATION_CONTRACT.md
     section 5's "all or nothing": a crash halfway must leave no trace of
@@ -175,6 +276,8 @@ async def upload_sheets(
     failing the whole batch of students.
     """
     gs = _owned_session(session_id, faculty, db)
+    if session_id in _cancelled_sessions:
+        raise HTTPException(status_code=409, detail="This session was cancelled.")
     items = db.scalars(
         select(AnswerKeyItem).where(AnswerKeyItem.answer_key_id == gs.answer_key_id).order_by(AnswerKeyItem.item_no)
     ).all()
@@ -215,7 +318,28 @@ async def upload_sheets(
                 detail=f"Page {page_no} is larger than the {MAX_PAGE_BYTES // (1024 * 1024)}MB limit per image.",
             )
         safe_name = _safe_filename(upload.filename)
-        saved_path = settings.upload_dir / f"session_{session_id}" / f"{sheet_code}_p{page_no}_{safe_name}"
+        suffix = Path(safe_name).suffix.lower()
+        if suffix not in SUPPORTED_IMAGE_EXTENSIONS:
+            db.rollback()
+            for saved in saved_paths:
+                Path(saved).unlink(missing_ok=True)
+            allowed = "JPG, JPEG, PNG, BMP, TIF, TIFF, HEIC, or HEIF"
+            raise HTTPException(status_code=415, detail=f"Page {page_no} must be a {allowed} image.")
+
+        stored_name = safe_name
+        if is_heif_filename(safe_name):
+            try:
+                raw = heif_to_jpeg(raw)
+            except ImageFormatError as exc:
+                db.rollback()
+                for saved in saved_paths:
+                    Path(saved).unlink(missing_ok=True)
+                raise HTTPException(status_code=415, detail=f"Page {page_no}: {exc}") from exc
+            # YOLO/OpenCV gets the converted JPEG, while original_filename
+            # below retains the teacher's HEIC filename for the audit trail.
+            stored_name = f"{Path(safe_name).stem or 'sheet'}.jpg"
+
+        saved_path = settings.upload_dir / f"session_{session_id}" / f"{sheet_code}_p{page_no}_{stored_name}"
         saved_path.parent.mkdir(parents=True, exist_ok=True)
         saved_path.write_bytes(raw)
         saved_paths.append(str(saved_path))
@@ -237,8 +361,26 @@ async def upload_sheets(
         # run it off the event loop so one submission's model calls
         # don't stall every other request this server is handling.
         result = await asyncio.to_thread(
-            inference_pipeline.run_sheet_group, saved_paths, items, crop_dir, sheet_code
+            inference_pipeline.run_sheet_group,
+            saved_paths,
+            items,
+            crop_dir,
+            sheet_code,
+            lambda: session_id in _cancelled_sessions,
         )
+    except inference_pipeline.PipelineCancelled:
+        # The teacher cancelled while this submission was being graded --
+        # none of it should survive: not the sheet/page rows (committed
+        # above, before grading started), the saved page images, or any
+        # crops written so far.
+        db.delete(sheet)  # pages cascade (fk_page_sheet ON DELETE CASCADE)
+        db.commit()
+        for saved in saved_paths:
+            Path(saved).unlink(missing_ok=True)
+        for crop in crop_dir.glob(f"{sheet_code}_item*"):
+            crop.unlink(missing_ok=True)
+        logger.info("Session %s cancelled: discarded in-progress submission %s", session_id, sheet_code)
+        return {"cancelled": True}
     except Exception as exc:  # noqa: BLE001 -- a model failure must not corrupt the batch
         for page in pages:
             page.processing_status = "error"
@@ -252,7 +394,7 @@ async def upload_sheets(
         StudentInfo(
             sheet_id=sheet.sheet_id,
             name=identity.get("name"),
-            section=identity.get("section"),
+            section=canonical_section(identity.get("section")) or None,
             consent_status="consented" if consent_confirmed else "not_consented",
         )
     )

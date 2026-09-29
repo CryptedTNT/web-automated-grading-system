@@ -45,7 +45,6 @@ const activeTab = ref('set-account')
 
 const account = ref({
   full_name: store.currentUser?.full_name || '',
-  institution: store.currentUser?.institution || '',
 })
 const passwords = ref({ current: '', next: '', confirm: '' })
 const invalid = ref(new Set())
@@ -191,12 +190,9 @@ async function saveAccount() {
     /* Assigning to the store is all that is needed — the sidebar and
        top bar bind to currentUser, so the old updateUserLabels() call
        has no equivalent here. */
-    store.currentUser = await API.updateUserProfile(user.id, name, account.value.institution.trim())
+    store.currentUser = await API.updateUserProfile(user.id, name, null)
     passwords.value = { current: '', next: '', confirm: '' }
-    account.value = {
-      full_name: store.currentUser.full_name,
-      institution: store.currentUser.institution || '',
-    }
+    account.value = { full_name: store.currentUser.full_name }
     await showMessage(
       'Settings Saved',
       changingPassword ? 'Profile and password changes were saved.' : 'Profile changes were saved.',
@@ -312,11 +308,23 @@ function consentFormHtml() {
     .checkbox-line { margin: 10px 0; }
     .sign-block { margin-top: 34px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px 28px; }
     .print { margin: 0 0 18px; padding: 8px 14px; border: 0; background: #1f6fb2; color: white; cursor: pointer; }
-    @media print { body { margin: 0; max-width: none; } .print { display: none; } }
+    /* Print without the browser's own header/footer (page title, "about:blank", date, page
+       number): those are drawn inside the @page margin, so it is 0 here and the paper margin is
+       rebuilt inside the page -- the table's header/footer spacers repeat on every printed page,
+       which plain body padding would not (see services/questionnaireTemplate.js). */
+    @page { size: A4; margin: 0; }
+    .print-frame { width: 100%; border-collapse: collapse; }
+    .print-frame td { padding: 0; }
+    .print-margin { height: 0; }
+    @media print { body { margin: 0; max-width: none; padding: 0 1in; } .print { display: none; } .print-margin { height: 0.9in; } }
   </style>
 </head>
 <body>
   <button class="print" onclick="window.print()">Print Form</button>
+  <table class="print-frame">
+    <thead><tr><td><div class="print-margin"></div></td></tr></thead>
+    <tfoot><tr><td><div class="print-margin"></div></td></tr></tfoot>
+    <tbody><tr><td>
   <h1>Student Data Consent Form</h1>
   <div class="subtitle">Automated Grading System for Handwritten Objective Examinations</div>
 
@@ -359,6 +367,8 @@ function consentFormHtml() {
     <div>Signature:<div class="line"></div></div>
     <div>Signature (parent/guardian, if applicable):<div class="line"></div></div>
   </div>
+    </td></tr></tbody>
+  </table>
 </body>
 </html>`
 }
@@ -490,10 +500,6 @@ function selectTheme(key) {
             :class="{ invalid: isInvalid('full_name') }"
           >
         </div>
-        <div class="form-group">
-          <label class="form-label" for="set-inst">Institution</label>
-          <input id="set-inst" v-model="account.institution" type="text" maxlength="160">
-        </div>
         <div class="form-group settings-span-2">
           <label class="form-label" for="set-user">Username</label>
           <input id="set-user" type="text" :value="username" readonly>
@@ -589,7 +595,6 @@ function selectTheme(key) {
             a real answer key's Preview/Print produces.
           </div>
         </div>
-        <span class="badge badge-blue">HTML Template</span>
       </div>
       <div class="settings-actions">
         <button class="btn btn-primary" @click="previewTemplate">Preview Template</button>
@@ -604,7 +609,6 @@ function selectTheme(key) {
             processed by this system — see the Privacy Policy for what that processing involves.
           </div>
         </div>
-        <span class="badge badge-blue">HTML Template</span>
       </div>
       <div class="settings-actions">
         <button class="btn btn-primary" @click="previewConsentForm">Preview Consent Form</button>

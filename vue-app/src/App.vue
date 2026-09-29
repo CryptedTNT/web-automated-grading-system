@@ -25,13 +25,15 @@ const pageTitle = computed(() => route.meta.title || 'Workspace')
 
 const NAV_ITEMS = [
   { name: 'dashboard', icon: 'dashboard', label: 'Dashboard', title: 'View overall grading statistics and recent system activity.' },
-  { name: 'answer_key', icon: 'answerKeys', label: 'Answer Keys', title: 'Create, edit, save, and delete answer keys.' },
+  { name: 'answer_key', icon: 'answerKeys', label: 'Build a Questionnaire', title: 'Create and manage questionnaires and answer keys.' },
   { name: 'upload', icon: 'upload', label: 'Upload Sheets', title: 'Upload scanned or captured answer sheet images.' },
-  { name: 'processing', icon: 'processing', label: 'Processing', title: 'Run automated grading (YOLO detection + TrOCR recognition) on the upload queue.' },
+  { name: 'processing', icon: 'processing', label: 'Grade Papers', title: 'Grade the answer sheets in the upload queue.' },
   { name: 'results', icon: 'results', label: 'Results', title: 'View grading session summaries and student scores.' },
+  { name: 'students', icon: 'student', label: 'Students', title: 'Browse every graded student and answer key, and search a student\'s full history.' },
   { name: 'student_result', icon: 'student', label: 'Student Result', title: 'View item-level results for a selected student.' },
   { name: 'review', icon: 'review', label: 'Review Flagged', title: 'Manually check flagged answers that need teacher review.' },
   { name: 'reports', icon: 'reports', label: 'Reports', title: 'Export grading sessions.' },
+  { name: 'exam_analysis', icon: 'reports', label: 'Exam Analysis', title: 'See an exam\'s overall performance, score distribution, and most-missed questions.' },
   { name: 'how_to_use', icon: 'help', label: 'How to Use', title: 'Open the step-by-step guide for using the system.' },
   { name: 'settings', icon: 'settings', label: 'Settings', title: 'Change account, export, template, and display settings.' },
 ]
@@ -42,7 +44,17 @@ const closeMobile = () => { mobileOpen.value = false }
 
 // Close the drawer whenever navigation happens — the old code had to
 // call closeMobileSidebar() by hand at every call site.
-watch(() => route.fullPath, closeMobile)
+watch(() => route.fullPath, () => {
+  closeMobile()
+  // The application shell owns its own scroll container rather than using
+  // the browser window. Reset it after every navigation so a teacher never
+  // lands halfway down a different screen just because the prior one was
+  // long (for example, an answer key or report).
+  requestAnimationFrame(() => {
+    document.getElementById('pages-container')?.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    document.querySelector('.auth-view')?.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  })
+})
 
 function onKeydown(event) {
   if (event.key === 'Escape') closeMobile()

@@ -430,6 +430,13 @@ input:focus, select:focus, textarea:focus {
 input.invalid, select.invalid {
   border: 1.5px solid var(--danger);
 }
+textarea.invalid, .mc-choice.invalid {
+  border-color: var(--danger);
+}
+.mc-choice.invalid {
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 14%, transparent);
+}
 
 /* Hide native Edge/IE password reveal icons to prevent double icons */
 input[type="password"]::-ms-reveal,
@@ -881,6 +888,23 @@ table input, table select {
 .qb-section-header select { max-width: 240px; }
 .qb-add-section { margin-top: 18px; }
 .qb-index { font-weight: 700; min-width: 20px; }
+/* Marks a question/statement/blank that's missing a required field
+   (see AnswerKeyView.vue's mcIssues()/tfIssues()/idIssues()/
+   enumGroupIssues()) -- a left border on the whole row/card so it's
+   noticeable while scanning the list, plus a tooltip icon naming
+   exactly what's missing rather than making the teacher guess. */
+.qb-issue-marker { color: #9A6500; font-size: 13px; cursor: help; }
+[data-theme="dark"] .qb-issue-marker { color: #F5D47A; }
+.mc-card.qb-item-incomplete, .enum-group.qb-item-incomplete {
+  border-left: 3px solid #E2A24B;
+  background: #FFFBF2;
+}
+[data-theme="dark"] .mc-card.qb-item-incomplete,
+[data-theme="dark"] .enum-group.qb-item-incomplete {
+  background: #3A331F;
+}
+tr.qb-item-incomplete > td { background: #FFFBF2; }
+[data-theme="dark"] tr.qb-item-incomplete > td { background: #3A331F; }
 .mc-choices {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1139,6 +1163,8 @@ table input, table select {
   border: 1px solid var(--card-border);
 }
 .success-notice { background: #EAF8F1; border-color: #B6E5CE; color: #147D4F; }
+.warning-notice { background: #FDF3E4; border-color: #F0D6A6; color: #8A5A12; }
+.qb-incomplete-entry { display: block; margin-top: 4px; font-size: 12.5px; }
 .review-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--text-muted); }
 .review-details {
   display: grid;
@@ -1390,7 +1416,7 @@ table tr:hover { background: #F6FAFE; }
 .dashboard-step strong, .dashboard-step small { display: block; }
 .dashboard-step strong { margin-bottom: 4px; font-size: 12px; color: #FFFFFF; }
 .dashboard-step small { color: #C6D7E4; font-size: 11px; line-height: 1.4; }
-.metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--card-border); border-radius: 12px; background: #FFFFFF; overflow: hidden; margin-bottom: 22px; box-shadow: var(--shadow-card); }
+.metrics-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border: 1px solid var(--card-border); border-radius: 12px; background: #FFFFFF; overflow: hidden; margin-bottom: 22px; box-shadow: var(--shadow-card); }
 .metric-panel { min-height: 122px; padding: 21px 21px; border-right: 1px solid var(--card-border); }
 .metric-panel:last-child { border-right: 0; }
 .metric-label { display: block; color: #65778A; font-size: 11px; font-weight: 650; }
@@ -1399,8 +1425,7 @@ table tr:hover { background: #F6FAFE; }
 .metric-caption { color: #8090A0; font-size: 10.5px; }
 .metric-panel-alert { background: #FFFCF5; }
 .metric-panel-alert strong { color: #B46A18; }
-.dashboard-content-grid { display: grid; grid-template-columns: minmax(0, 1.72fr) minmax(280px, .78fr); gap: 22px; align-items: start; }
-.session-panel, .action-panel { border: 1px solid var(--card-border); border-radius: 12px; background: #FFFFFF; box-shadow: var(--shadow-card); }
+.session-panel { border: 1px solid var(--card-border); border-radius: 12px; background: #FFFFFF; box-shadow: var(--shadow-card); }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 22px 23px 18px; }
 .panel-heading h2 { font-size: 16px; }
 .panel-heading a { padding-top: 4px; font-size: 11px; font-weight: 700; text-decoration: none; white-space: nowrap; }
@@ -1413,17 +1438,6 @@ table tr:hover { background: #F6FAFE; }
 .dashboard-empty strong, .dashboard-empty span { display: block; }
 .dashboard-empty strong { margin-bottom: 5px; color: #405569; font-size: 12px; }
 .dashboard-empty span { color: #7C8C9B; font-size: 11px; }
-.action-panel { padding-bottom: 8px; }
-.action-list { padding: 0 11px 11px; }
-.action-link { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 12px; border: 0; border-top: 1px solid #EAF0F5; background: transparent; color: #223D53; cursor: pointer; text-align: left; font-family: inherit; }
-.action-link:first-child { border-top: 0; }
-.action-link:hover { background: #F5F9FD; }
-.action-link span:first-child { min-width: 0; }
-.action-link strong, .action-link small { display: block; }
-.action-link strong { font-size: 12px; }
-.action-link small { margin-top: 3px; color: #748698; font-size: 10.5px; line-height: 1.35; }
-.action-link-primary strong { color: var(--primary); }
-.action-arrow { color: #7890A3; font-size: 17px; }
 
 /* Workflow pages: stable, quiet surfaces keep dense grading work readable. */
 .workflow-layout { gap: 22px; }
@@ -1542,7 +1556,6 @@ table tr:hover { background: #F6FAFE; }
   .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-panel:nth-child(2) { border-right: 0; }
   .metric-panel:nth-child(-n + 2) { border-bottom: 1px solid var(--card-border); }
-  .dashboard-content-grid { grid-template-columns: 1fr; }
   .hero-panel { padding: 30px; background: var(--hero-bg); }
   .hero-brand { margin-bottom: 36px; }
 }
@@ -1651,7 +1664,6 @@ table tr:hover { background: #F6FAFE; }
 [data-theme="dark"] .card,
 [data-theme="dark"] .comparison-card,
 [data-theme="dark"] .session-panel,
-[data-theme="dark"] .action-panel,
 [data-theme="dark"] .metrics-grid,
 [data-theme="dark"] .auth-card,
 [data-theme="dark"] .tab-content,
@@ -1700,18 +1712,9 @@ table tr:hover { background: #F6FAFE; }
 [data-theme="dark"] .dashboard-step > span {
   color: #B4B4B4;
 }
-[data-theme="dark"] .session-table,
-[data-theme="dark"] .action-link,
-[data-theme="dark"] .action-link:first-child {
+[data-theme="dark"] .session-table {
   border-color: var(--table-grid);
 }
-[data-theme="dark"] .action-link {
-  color: var(--text-primary);
-}
-[data-theme="dark"] .action-link:hover {
-  background: #3A3A3A;
-}
-[data-theme="dark"] .action-link small,
 [data-theme="dark"] .metric-caption,
 [data-theme="dark"] .dashboard-empty span {
   color: var(--text-muted);
@@ -1768,6 +1771,11 @@ table tr:hover { background: #F6FAFE; }
   background: #1D4639;
   border-color: #356A59;
   color: #D4F2E7;
+}
+[data-theme="dark"] .inline-notice.warning-notice {
+  background: #4A3B1D;
+  border-color: #715A2E;
+  color: #F2DFB6;
 }
 [data-theme="dark"] .completion-mark {
   background: #1D4639;
@@ -1918,6 +1926,422 @@ table tr:hover { background: #F6FAFE; }
   .legal-modal-body { padding: 18px 18px 24px; }
 }
 
+/* ---------- Sizing/layout parity for dark mode ----------
+   Every rule below the next section header is scoped
+   `html:not([data-theme="dark"])`, so dark mode never received any of
+   this pass's sizing (padding, font-size, gap, border-radius...) --
+   only the 4 light palettes did, which is what made dark mode "look
+   smaller"/older everywhere from the sidebar down to individual cards
+   and buttons, not just one component.
+   This block mechanically extracted (see scratchpad, not checked in)
+   just the non-color declarations from every one of those rules and
+   re-applies them with plain, unscoped selectors -- colors are
+   deliberately left 100% untouched below, so this can only ever ADD
+   layout that dark mode was missing, never change a color anywhere.
+   For the 4 light themes this changes nothing (the original scoped
+   rules are more specific and still win); dark mode now resolves the
+   same sizing the other 4 themes already had. */
+.dashboard-title-block > div::before,
+.page > .title-block:not(.dashboard-title-block) .page-title::before {
+  color: var(--text-muted);
+}
+#sidebar {
+  width: 250px;
+  min-width: 250px;
+  padding: 24px 12px 17px;
+}
+.brand-lockup {
+  padding: 5px 10px 28px;
+}
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+#sidebar .sidebar-title {
+  font-size: 14px;
+  letter-spacing: -.035em;
+}
+.nav-kicker {
+  padding: 0 11px 10px;
+}
+.sidebar-nav {
+  gap: 5px;
+}
+.sidebar-btn {
+  min-height: 43px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 12.5px;
+  transition: background .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
+}
+.sidebar-btn:hover {
+  transform: translateX(2px);
+}
+.sidebar-account {
+  margin: 16px 5px 4px;
+  padding: 16px 5px 10px;
+}
+#content-root {
+  padding: 0 36px 42px;
+}
+#top-bar {
+  height: 82px;
+  min-height: 82px;
+}
+#top-bar .top-title {
+  font-size: 18px;
+  letter-spacing: -.035em;
+}
+#top-bar .top-search {
+  width: 300px;
+  min-height: 40px;
+  border-radius: 10px;
+}
+#pages-container {
+  padding-top: 34px;
+}
+.page-title {
+  font-size: 30px;
+  letter-spacing: -.052em;
+}
+.page-subtitle {
+  font-size: 13px;
+}
+.title-block {
+  margin-bottom: 28px;
+}
+.btn {
+  min-height: 40px;
+  border-radius: 9px;
+  font-weight: 700;
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+}
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.card, .comparison-card, .session-panel {
+  border-radius: 16px;
+}
+.dashboard-page {
+  max-width: 1510px;
+  margin: 0 auto;
+}
+.dashboard-title-block {
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+.dashboard-title-block > div::before {
+  content: 'TODAY’S WORKSPACE';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.dashboard-cta {
+  min-width: 126px;
+}
+.dashboard-start {
+  position: relative;
+  overflow: hidden;
+  grid-template-columns: minmax(290px, .9fr) minmax(520px, 1.55fr);
+  gap: 42px;
+  padding: 31px 34px;
+  border-radius: 18px;
+}
+.dashboard-start::after {
+  content: '';
+  position: absolute;
+  right: 23%;
+  bottom: -77px;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.dashboard-start-copy, .dashboard-steps {
+  position: relative;
+  z-index: 1;
+}
+.dashboard-start h2 {
+  max-width: 455px;
+  font-size: 23px;
+  letter-spacing: -.035em;
+}
+.dashboard-steps {
+  gap: 10px;
+  padding: 0;
+  border: 0;
+}
+.dashboard-step {
+  min-height: 78px;
+  align-items: flex-start;
+  padding: 13px 14px;
+  border-radius: 11px;
+}
+.dashboard-step strong {
+  font-size: 12px;
+}
+.dashboard-step small {
+  font-size: 10.5px;
+}
+.metrics-grid {
+  gap: 14px;
+  margin: 16px 0 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.metric-panel {
+  position: relative;
+  min-height: 130px;
+  padding: 21px;
+  overflow: hidden;
+  border-radius: 15px;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.metric-panel:hover {
+  transform: translateY(-2px);
+}
+.metric-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+}
+.metric-panel strong {
+  margin: 10px 0 6px;
+  font-size: 30px;
+}
+.panel-heading {
+  padding: 22px 24px 17px;
+}
+.session-panel {
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  .dashboard-start {
+    grid-template-columns: 1fr;
+    gap: 22px;
+  }
+}
+@media (max-width: 960px) {
+  #content-root {
+    padding: 0 22px 30px;
+  }
+}
+@media (max-width: 720px) {
+  #content-root {
+    padding: 0 14px 24px;
+  }
+  .dashboard-start {
+    padding: 24px 21px;
+  }
+  .dashboard-step {
+    min-height: 0;
+  }
+  .metrics-grid {
+    gap: 10px;
+  }
+}
+body {
+  font-family: 'DM Sans', 'Segoe UI Variable Text', 'Segoe UI', Arial, sans-serif;
+  font-size: 13px;
+  letter-spacing: -.006em;
+}
+.nav-kicker, .top-eyebrow, .section-eyebrow, table th {
+  font-family: 'DM Mono', 'Cascadia Mono', Consolas, monospace;
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+.top-title, .page-title, .card-title, .section-title, .panel-heading h2 {
+  font-weight: 700;
+}
+.page > .title-block:not(.dashboard-title-block) .page-title::before {
+  content: 'ASSESSMENT WORKSPACE';
+  display: block;
+  margin: 0 0 7px;
+  font-family: 'DM Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .095em;
+}
+.page > .title-block:not(.dashboard-title-block) .page-subtitle {
+  max-width: 720px;
+}
+.card {
+  padding: 24px;
+}
+.card-title {
+  font-size: 14px;
+}
+.section-title {
+  letter-spacing: -.018em;
+}
+.btn {
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  letter-spacing: -.01em;
+}
+input[type="text"], input[type="password"], input[type="email"], input[type="number"], select, textarea {
+  font-family: inherit;
+}
+table th {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  font-size: 9.5px;
+}
+table td {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+.badge {
+  border-radius: 999px;
+  font-weight: 700;
+}
+.workflow-layout {
+  gap: 18px;
+  align-items: flex-start;
+}
+.workflow-sidebar {
+  min-width: 282px;
+  max-width: 342px;
+}
+.form-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+.list-widget, .file-list {
+  overflow: hidden;
+  border-radius: 11px;
+}
+.list-widget .list-item {
+  padding: 13px 14px;
+}
+.qb-section {
+  padding: 19px;
+  border-radius: 14px;
+}
+.qb-section-header {
+  padding-bottom: 13px;
+}
+.mc-card, .enum-group {
+  border-radius: 11px;
+  box-shadow: none;
+}
+.mc-meta {
+  padding-top: 11px;
+}
+.drop-zone {
+  min-height: 230px;
+  border-radius: 15px;
+}
+.model-note, .processing-banner {
+  border-radius: 11px;
+}
+.submission-card {
+  padding: 14px 16px;
+  border-radius: 11px;
+}
+.log-box {
+  border-radius: 12px;
+}
+.progress-bar {
+  height: 8px;
+}
+.action-bar {
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 11px;
+  border-radius: 13px;
+}
+.results-summary {
+  padding: 0 0 16px;
+}
+.results-table-wrapper, .reports-table-wrapper, .student-result-table {
+  margin-top: 16px;
+  border-radius: 10px;
+}
+.comparison-row {
+  gap: 14px;
+}
+.comparison-card {
+  min-height: 154px;
+  padding: 20px;
+}
+.review-details > div {
+  border-radius: 10px;
+}
+.remarks-box {
+  border-radius: 0 10px 10px 0;
+}
+.reports-stats {
+  gap: 14px;
+}
+.reports-stats .stat-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+}
+.reports-stats .stat-card::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+}
+.review-complete, .empty-state {
+  min-height: 280px;
+}
+.tabs, .settings-tabs {
+  gap: 6px;
+}
+.tab-btn {
+  padding: 10px 15px;
+  border: 1px solid transparent;
+  border-radius: 9px 9px 0 0;
+}
+.tab-content {
+  padding: 26px;
+  border-radius: 0 14px 14px 14px;
+}
+.preference-group {
+  border-radius: 11px;
+}
+.theme-swatch {
+  border-radius: 12px;
+}
+@media (max-width: 960px) {
+  .workflow-sidebar {
+    min-width: 0;
+    max-width: none;
+  }
+  .action-bar {
+    align-items: stretch;
+  }
+}
+@media (max-width: 720px) {
+  .page > .title-block:not(.dashboard-title-block) .page-title {
+    font-size: 26px;
+  }
+  .card {
+    padding: 18px;
+  }
+  .action-bar {
+    padding: 9px;
+    border-radius: 11px;
+  }
+  .tab-content {
+    padding: 19px;
+  }
+}
+
 /* ---------- Workspace refinement: calm, editorial, and task-focused ----------
    Applied to the Vue workspace only. This leaves all page logic and routing intact. */
 html:not([data-theme="dark"]) {
@@ -2014,8 +2438,7 @@ html:not([data-theme="dark"]) .btn-primary { box-shadow: 0 6px 14px color-mix(in
 html:not([data-theme="dark"]) .btn-secondary { border-color: #D6E2ED; color: #29465F; }
 html:not([data-theme="dark"]) .card,
 html:not([data-theme="dark"]) .comparison-card,
-html:not([data-theme="dark"]) .session-panel,
-html:not([data-theme="dark"]) .action-panel {
+html:not([data-theme="dark"]) .session-panel {
   border-color: var(--card-border);
   border-radius: 16px;
   box-shadow: var(--shadow-card);
@@ -2123,29 +2546,19 @@ html:not([data-theme="dark"]) .metric-panel::before {
 }
 html:not([data-theme="dark"]) .metric-panel:nth-child(2)::before { background: #6B92D6; }
 html:not([data-theme="dark"]) .metric-panel:nth-child(3)::before { background: #E2A24B; }
-html:not([data-theme="dark"]) .metric-panel:nth-child(4)::before { background: #5DAF8E; }
+html:not([data-theme="dark"]) .metric-panel:nth-child(4)::before { background: #D78244; }
+html:not([data-theme="dark"]) .metric-panel:nth-child(5)::before { background: #5DAF8E; }
+html:not([data-theme="dark"]) .metric-panel:nth-child(6)::before { background: #8B6BD6; }
 html:not([data-theme="dark"]) .metric-panel:last-child { border-right: 1px solid var(--card-border); }
 html:not([data-theme="dark"]) .metric-label { color: #667B90; }
 html:not([data-theme="dark"]) .metric-panel strong { margin: 10px 0 6px; font-size: 30px; }
 html:not([data-theme="dark"]) .metric-caption { color: #7B8E9F; }
 html:not([data-theme="dark"]) .metric-panel-alert { background: #FFFDF8; }
 
-html:not([data-theme="dark"]) .dashboard-content-grid { gap: 18px; }
 html:not([data-theme="dark"]) .panel-heading { padding: 22px 24px 17px; }
 html:not([data-theme="dark"]) .session-panel { overflow: hidden; }
 html:not([data-theme="dark"]) .session-table { border-top: 1px solid #E9EEF4; }
 html:not([data-theme="dark"]) .session-table table th { background: #F8FAFC; }
-html:not([data-theme="dark"]) .action-panel { padding-bottom: 9px; }
-html:not([data-theme="dark"]) .action-list { padding: 0 14px 12px; }
-html:not([data-theme="dark"]) .action-link {
-  padding: 15px 10px;
-  border-top-color: #E9EEF4;
-  border-radius: 9px;
-  transition: background .16s ease, padding .16s ease;
-}
-html:not([data-theme="dark"]) .action-link:hover { padding-left: 14px; background: #F5F8FC; }
-html:not([data-theme="dark"]) .action-link strong { color: #1C3D5A; }
-html:not([data-theme="dark"]) .action-arrow { color: #5D7E9D; }
 
 @media (max-width: 1100px) {
   html:not([data-theme="dark"]) .dashboard-start { grid-template-columns: 1fr; gap: 22px; }
@@ -2203,7 +2616,6 @@ html:not([data-theme="dark"]) .page > .title-block:not(.dashboard-title-block) .
 html:not([data-theme="dark"]) .card,
 html:not([data-theme="dark"]) .comparison-card,
 html:not([data-theme="dark"]) .session-panel,
-html:not([data-theme="dark"]) .action-panel,
 html:not([data-theme="dark"]) .tab-content {
   border-color: #E1E9F1;
   box-shadow: 0 1px 2px rgba(15, 43, 68, .02), 0 9px 22px rgba(15, 43, 68, .045);
@@ -2433,4 +2845,645 @@ html:not([data-theme="dark"]) .theme-swatch { border-radius: 12px; }
   html:not([data-theme="dark"]) .card { padding: 18px; }
   html:not([data-theme="dark"]) .action-bar { padding: 9px; border-radius: 11px; }
   html:not([data-theme="dark"]) .tab-content { padding: 19px; }
+}
+
+/* ---------- Contrast: small muted text on light surfaces (WCAG AA, 4.5:1) ----------
+   Lighthouse "Background and foreground colors do not have a sufficient contrast ratio" flagged the top-bar
+   eyebrow, page subtitle and metric labels. The polish layer above sets these to #6B7F93 / #667B90 / #718397 /
+   #7B8E9F, which measure 3.1-4.4:1 on the page background and white. #5B6E81 measures 4.9:1 on --page-bg
+   (#F5F8FC), 5.3:1 on white and 5.1:1 on the alert panel. Light theme only: the dark theme keeps --text-muted
+   from theme.js, and the dark hero panel keeps its own lighter eyebrow (that rule is more specific). */
+html:not([data-theme="dark"]) .top-eyebrow,
+html:not([data-theme="dark"]) #top-bar .top-teacher,
+html:not([data-theme="dark"]) #top-bar .top-title::before,
+html:not([data-theme="dark"]) .page-subtitle,
+html:not([data-theme="dark"]) .metric-label,
+html:not([data-theme="dark"]) .metric-caption,
+html:not([data-theme="dark"]) .section-eyebrow,
+html:not([data-theme="dark"]) .dashboard-empty span,
+html:not([data-theme="dark"]) table th {
+  color: #5B6E81;
+}
+
+/* ---------- Sizing/layout parity for dark mode, part 2 (generated) ----------
+   The first parity block above only mirrored the first `html:not([data-theme="dark"])` polish pass. The later
+   "Workspace refinement" and "Product UI pass" sections use the same light-only scoping, so dark mode still lacked
+   their sizing (card padding, action bars, tabs, table spacing, radii...) -- most visible on narrow screens, where
+   Results/Reports/Upload showed a loose, unboxed filter bar in dark but a padded card in the other four themes.
+   Generated mechanically: for every light-only rule, the NON-COLOR declarations are re-applied under
+   `html[data-theme="dark"]` (same order, same @media wrappers). Colours, borders, shadows and backgrounds are never
+   copied, so dark keeps its own palette; the four light themes are unaffected (these selectors never match them).
+   Re-generate after editing the light-only rules. */
+html[data-theme="dark"] #sidebar {
+  width: 250px;
+  min-width: 250px;
+  padding: 24px 12px 17px;
+}
+html[data-theme="dark"] .brand-lockup {
+  padding: 5px 10px 28px;
+}
+html[data-theme="dark"] .brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+html[data-theme="dark"] #sidebar .sidebar-title {
+  font-size: 14px;
+  letter-spacing: -.035em;
+}
+html[data-theme="dark"] .nav-kicker {
+  padding: 0 11px 10px;
+}
+html[data-theme="dark"] .sidebar-nav {
+  gap: 5px;
+}
+html[data-theme="dark"] .sidebar-btn {
+  min-height: 43px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  transition: background .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
+}
+html[data-theme="dark"] .sidebar-btn:hover {
+  transform: translateX(2px);
+}
+html[data-theme="dark"] .sidebar-account {
+  margin: 16px 5px 4px;
+  padding: 16px 5px 10px;
+}
+html[data-theme="dark"] #content-root {
+  padding: 0 36px 42px;
+}
+html[data-theme="dark"] #top-bar {
+  height: 82px;
+  min-height: 82px;
+}
+html[data-theme="dark"] #top-bar .top-title {
+  font-size: 18px;
+  letter-spacing: -.035em;
+}
+html[data-theme="dark"] #top-bar .top-search {
+  width: 300px;
+  min-height: 40px;
+  border-radius: 10px;
+}
+html[data-theme="dark"] #pages-container {
+  padding-top: 34px;
+}
+html[data-theme="dark"] .page-title {
+  font-size: 30px;
+  letter-spacing: -.052em;
+}
+html[data-theme="dark"] .page-subtitle {
+  font-size: 13px;
+}
+html[data-theme="dark"] .title-block {
+  margin-bottom: 28px;
+}
+html[data-theme="dark"] .btn {
+  min-height: 40px;
+  border-radius: 9px;
+  font-weight: 700;
+  transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+}
+html[data-theme="dark"] .btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .comparison-card,
+html[data-theme="dark"] .session-panel {
+  border-radius: 16px;
+}
+html[data-theme="dark"] .dashboard-page {
+  max-width: 1510px;
+  margin: 0 auto;
+}
+html[data-theme="dark"] .dashboard-title-block {
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+html[data-theme="dark"] .dashboard-title-block > div::before {
+  content: 'TODAY’S WORKSPACE';
+  display: block;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+html[data-theme="dark"] .dashboard-cta {
+  min-width: 126px;
+}
+html[data-theme="dark"] .dashboard-start {
+  position: relative;
+  overflow: hidden;
+  grid-template-columns: minmax(290px, .9fr) minmax(520px, 1.55fr);
+  gap: 42px;
+  padding: 31px 34px;
+  border-radius: 18px;
+}
+html[data-theme="dark"] .dashboard-start::after {
+  content: '';
+  position: absolute;
+  right: 23%;
+  bottom: -77px;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+html[data-theme="dark"] .dashboard-start-copy,
+html[data-theme="dark"] .dashboard-steps {
+  position: relative;
+  z-index: 1;
+}
+html[data-theme="dark"] .dashboard-start h2 {
+  max-width: 455px;
+  font-size: 23px;
+  letter-spacing: -.035em;
+}
+html[data-theme="dark"] .dashboard-steps {
+  gap: 10px;
+  padding: 0;
+}
+html[data-theme="dark"] .dashboard-step {
+  min-height: 78px;
+  align-items: flex-start;
+  padding: 13px 14px;
+  border-radius: 11px;
+}
+html[data-theme="dark"] .dashboard-step strong {
+  font-size: 12px;
+}
+html[data-theme="dark"] .dashboard-step small {
+  font-size: 10.5px;
+}
+html[data-theme="dark"] .metrics-grid {
+  gap: 14px;
+  margin: 16px 0 24px;
+  border-radius: 0;
+  overflow: visible;
+}
+html[data-theme="dark"] .metric-panel {
+  position: relative;
+  min-height: 130px;
+  padding: 21px;
+  overflow: hidden;
+  border-radius: 15px;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+html[data-theme="dark"] .metric-panel:hover {
+  transform: translateY(-2px);
+}
+html[data-theme="dark"] .metric-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+}
+html[data-theme="dark"] .metric-panel strong {
+  margin: 10px 0 6px;
+  font-size: 30px;
+}
+html[data-theme="dark"] .panel-heading {
+  padding: 22px 24px 17px;
+}
+html[data-theme="dark"] .session-panel {
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  html[data-theme="dark"] .dashboard-start {
+    grid-template-columns: 1fr;
+    gap: 22px;
+  }
+}
+@media (max-width: 960px) {
+  html[data-theme="dark"] #content-root {
+    padding: 0 22px 30px;
+  }
+}
+@media (max-width: 720px) {
+  html[data-theme="dark"] #content-root {
+    padding: 0 14px 24px;
+  }
+  html[data-theme="dark"] .dashboard-start {
+    padding: 24px 21px;
+  }
+  html[data-theme="dark"] .dashboard-step {
+    min-height: 0;
+  }
+  html[data-theme="dark"] .metrics-grid {
+    gap: 10px;
+  }
+}
+html[data-theme="dark"] body {
+  font-family: 'DM Sans', 'Segoe UI Variable Text', 'Segoe UI', Arial, sans-serif;
+  font-size: 13px;
+  letter-spacing: -.006em;
+}
+html[data-theme="dark"] .nav-kicker,
+html[data-theme="dark"] .top-eyebrow,
+html[data-theme="dark"] .section-eyebrow,
+html[data-theme="dark"] table th {
+  font-family: 'DM Mono', 'Cascadia Mono', Consolas, monospace;
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+html[data-theme="dark"] .top-title,
+html[data-theme="dark"] .page-title,
+html[data-theme="dark"] .card-title,
+html[data-theme="dark"] .section-title,
+html[data-theme="dark"] .panel-heading h2 {
+  font-weight: 700;
+}
+html[data-theme="dark"] .page > .title-block:not(.dashboard-title-block) .page-title::before {
+  content: 'ASSESSMENT WORKSPACE';
+  display: block;
+  margin: 0 0 7px;
+  font-family: 'DM Mono', 'Cascadia Mono', Consolas, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: .095em;
+}
+html[data-theme="dark"] .page > .title-block:not(.dashboard-title-block) .page-subtitle {
+  max-width: 720px;
+}
+html[data-theme="dark"] .card {
+  padding: 24px;
+}
+html[data-theme="dark"] .card-title {
+  font-size: 14px;
+}
+html[data-theme="dark"] .section-title {
+  letter-spacing: -.018em;
+}
+html[data-theme="dark"] .btn {
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  letter-spacing: -.01em;
+}
+html[data-theme="dark"] input[type="text"],
+html[data-theme="dark"] input[type="password"],
+html[data-theme="dark"] input[type="email"],
+html[data-theme="dark"] input[type="number"],
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea {
+  font-family: inherit;
+}
+html[data-theme="dark"] table th {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  font-size: 9.5px;
+}
+html[data-theme="dark"] table td {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+html[data-theme="dark"] .badge {
+  border-radius: 999px;
+  font-weight: 700;
+}
+html[data-theme="dark"] .workflow-layout {
+  gap: 18px;
+  align-items: flex-start;
+}
+html[data-theme="dark"] .workflow-sidebar {
+  min-width: 282px;
+  max-width: 342px;
+}
+html[data-theme="dark"] .form-label {
+  font-size: 11px;
+  font-weight: 700;
+}
+html[data-theme="dark"] .list-widget,
+html[data-theme="dark"] .file-list {
+  overflow: hidden;
+  border-radius: 11px;
+}
+html[data-theme="dark"] .list-widget .list-item {
+  padding: 13px 14px;
+}
+html[data-theme="dark"] .qb-section {
+  padding: 19px;
+  border-radius: 14px;
+}
+html[data-theme="dark"] .qb-section-header {
+  padding-bottom: 13px;
+}
+html[data-theme="dark"] .mc-card,
+html[data-theme="dark"] .enum-group {
+  border-radius: 11px;
+}
+html[data-theme="dark"] .mc-meta {
+  padding-top: 11px;
+}
+html[data-theme="dark"] .drop-zone {
+  min-height: 230px;
+  border-radius: 15px;
+}
+html[data-theme="dark"] .model-note,
+html[data-theme="dark"] .processing-banner {
+  border-radius: 11px;
+}
+html[data-theme="dark"] .submission-card {
+  padding: 14px 16px;
+  border-radius: 11px;
+}
+html[data-theme="dark"] .log-box {
+  border-radius: 12px;
+}
+html[data-theme="dark"] .progress-bar {
+  height: 8px;
+}
+html[data-theme="dark"] .action-bar {
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 11px;
+  border-radius: 13px;
+}
+html[data-theme="dark"] .results-summary {
+  padding: 0 0 16px;
+}
+html[data-theme="dark"] .results-table-wrapper,
+html[data-theme="dark"] .reports-table-wrapper,
+html[data-theme="dark"] .student-result-table {
+  margin-top: 16px;
+  border-radius: 10px;
+}
+html[data-theme="dark"] .comparison-row {
+  gap: 14px;
+}
+html[data-theme="dark"] .comparison-card {
+  min-height: 154px;
+  padding: 20px;
+}
+html[data-theme="dark"] .review-details > div {
+  border-radius: 10px;
+}
+html[data-theme="dark"] .remarks-box {
+  border-radius: 0 10px 10px 0;
+}
+html[data-theme="dark"] .reports-stats {
+  gap: 14px;
+}
+html[data-theme="dark"] .reports-stats .stat-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+}
+html[data-theme="dark"] .reports-stats .stat-card::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+}
+html[data-theme="dark"] .review-complete,
+html[data-theme="dark"] .empty-state {
+  min-height: 280px;
+}
+html[data-theme="dark"] .tabs,
+html[data-theme="dark"] .settings-tabs {
+  gap: 6px;
+}
+html[data-theme="dark"] .tab-btn {
+  padding: 10px 15px;
+  border-radius: 9px 9px 0 0;
+}
+html[data-theme="dark"] .tab-content {
+  padding: 26px;
+  border-radius: 0 14px 14px 14px;
+}
+html[data-theme="dark"] .preference-group {
+  border-radius: 11px;
+}
+html[data-theme="dark"] .theme-swatch {
+  border-radius: 12px;
+}
+@media (max-width: 960px) {
+  html[data-theme="dark"] .workflow-sidebar {
+    min-width: 0;
+    max-width: none;
+  }
+  html[data-theme="dark"] .action-bar {
+    align-items: stretch;
+  }
+}
+@media (max-width: 720px) {
+  html[data-theme="dark"] .page > .title-block:not(.dashboard-title-block) .page-title {
+    font-size: 26px;
+  }
+  html[data-theme="dark"] .card {
+    padding: 18px;
+  }
+  html[data-theme="dark"] .action-bar {
+    padding: 9px;
+    border-radius: 11px;
+  }
+  html[data-theme="dark"] .tab-content {
+    padding: 19px;
+  }
+}
+
+/* ---------- Dark mode: the card frames the light themes draw around these blocks ----------
+   The generated parity block above copies sizing only, never colours, so the frames (border/background) that the
+   light polish pass draws around the filter bar, table wrappers and a few section dividers were still missing in
+   dark: e.g. the Results/Reports filter controls sat loose on the page instead of inside a padded card. Same
+   frames, drawn with dark's own tokens. */
+html[data-theme="dark"] .action-bar {
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+}
+.submission-thumb-heif {
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; cursor: help; color: var(--primary, #2563EB);
+  font-size: 10px; font-weight: 800; letter-spacing: .03em;
+}
+html[data-theme="dark"] .results-summary {
+  border-bottom: 1px solid var(--card-border);
+}
+html[data-theme="dark"] .results-table-wrapper,
+html[data-theme="dark"] .reports-table-wrapper,
+html[data-theme="dark"] .student-result-table {
+  border: 1px solid var(--card-border);
+}
+html[data-theme="dark"] .qb-section-header {
+  border-bottom: 1px solid var(--card-border);
+}
+html[data-theme="dark"] .mc-meta {
+  border-top: 1px solid var(--card-border);
+}
+html[data-theme="dark"] .model-note {
+  border-color: var(--secondary-border);
+  background: var(--secondary-bg);
+}
+html[data-theme="dark"] .progress-fill {
+  background: linear-gradient(90deg, var(--progress-fill), var(--success));
+}
+html[data-theme="dark"] .dashboard-step {
+  border: 1px solid rgba(210, 232, 248, .18);
+  background: rgba(0, 0, 0, .18);
+}
+html[data-theme="dark"] .dashboard-step:last-child {
+  border-right: 1px solid rgba(210, 232, 248, .18);
+}
+html[data-theme="dark"] .review-details > div {
+  border: 1px solid var(--card-border);
+}
+
+/* ---------- Mobile usability: keep wide data readable ----------
+   On phones, forcing every table column into a 300-400px viewport makes
+   names, sections and actions wrap into unreadable fragments. Let a table
+   keep useful column widths instead and make its existing wrapper a clear,
+   touch-scrollable horizontal region. This applies to every view that uses
+   .table-wrapper (Students, Results, Reports, Answer Keys, Settings guides,
+   Dashboard and Student Result), so one page cannot regress separately. */
+@media (max-width: 720px) {
+  #content-root,
+  #pages-container,
+  .page,
+  .card,
+  .workflow-main,
+  .workflow-sidebar {
+    min-width: 0;
+  }
+
+  .table-wrapper,
+  .results-table-wrapper,
+  .reports-table-wrapper,
+  .student-result-table,
+  .session-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x pan-y;
+    scrollbar-width: thin;
+    scrollbar-color: var(--primary) transparent;
+  }
+
+  /* A small horizontal track makes the swipe affordance apparent on
+     Chromium/Android as well as on desktop browsers with a mouse. */
+  .table-wrapper::-webkit-scrollbar,
+  .results-table-wrapper::-webkit-scrollbar,
+  .reports-table-wrapper::-webkit-scrollbar,
+  .student-result-table::-webkit-scrollbar,
+  .session-table::-webkit-scrollbar { height: 8px; }
+  .table-wrapper::-webkit-scrollbar-thumb,
+  .results-table-wrapper::-webkit-scrollbar-thumb,
+  .reports-table-wrapper::-webkit-scrollbar-thumb,
+  .student-result-table::-webkit-scrollbar-thumb,
+  .session-table::-webkit-scrollbar-thumb {
+    background: var(--primary);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+
+  .table-wrapper > table {
+    min-width: 700px;
+  }
+  .student-result-table > table {
+    min-width: 1120px;
+  }
+
+  /* Filters/actions stay full-width rather than competing for a thin row. */
+  .action-bar > input,
+  .action-bar > select {
+    width: 100% !important;
+    max-width: none;
+    flex-basis: 100%;
+  }
+  .action-bar .spacer { display: none; }
+  .action-bar .btn { flex: 1 1 145px; }
+
+  /* Settings and account actions contain long labels such as verification
+     buttons, so wrap them before they can overflow their card. */
+  .settings-actions {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+  .settings-actions .btn { flex: 1 1 145px; }
+
+  /* Tabs retain their labels and can be swiped horizontally instead of
+     wrapping into several rows with unclear active state. */
+  .tabs,
+  .settings-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x pan-y;
+  }
+  .tabs .tab-btn,
+  .settings-tabs .tab-btn { flex: 0 0 auto; }
+
+  /* The upload page has a six-column desktop row. Let it wrap into useful
+     controls on a phone instead of creating a page-wide overflow. */
+  .submission-card-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .submission-card-head > .btn { width: 100%; }
+  .submission-page {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .submission-page-name { grid-column: 2; }
+  .submission-page .upload-file-size { grid-column: 2; text-align: left; }
+  .submission-page .submission-move-select { grid-column: 2 / -1; width: 100%; }
+  .submission-page > .btn { grid-column: 2 / -1; width: 100%; }
+}
+
+/* ---------- Print (Reports page: printing a session record for filing) ---------- */
+@media print {
+  #sidebar, #top-bar, .no-print, .print-hide {
+    display: none !important;
+  }
+  #content-root {
+    padding: 0 !important;
+  }
+  body {
+    background: #FFFFFF !important;
+  }
+  .card {
+    box-shadow: none !important;
+    border: none !important;
+  }
+  table {
+    font-size: 11px;
+  }
+}
+
+/* ---------- Students page: student directory + answer-key rollup ---------- */
+.students-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 20px; align-items: start; }
+.student-correction-hint { margin-top: 14px; }
+.student-identity-card { margin-bottom: 16px; }
+.student-identity-form { margin-top: 14px; }
+.student-identity-summary { margin-top: 14px; margin-bottom: 0; }
+.student-identity-actions { margin-top: 14px; }
+.student-trend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 14px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: var(--card-bg, #F8FAFC);
+}
+.student-trend-sparkline { width: 160px; height: 32px; color: var(--primary, #2563EB); flex-shrink: 0; }
+.student-trend strong { display: block; font-size: 13px; }
+.student-trend .muted-text { font-size: 11.5px; }
+
+/* ---------- Exam Analysis: score distribution bars (plain CSS, no chart library) ---------- */
+.distribution-table { width: 100%; border-collapse: collapse; }
+.distribution-table td { padding: 8px 6px; border-bottom: 1px solid var(--table-grid, #EDF0F4); font-size: 12.5px; }
+.distribution-label { width: 110px; white-space: nowrap; color: var(--text-primary, #223D53); }
+.distribution-bar-cell { width: 100%; }
+.distribution-bar-track { background: var(--card-border, #E1E9F1); border-radius: 5px; height: 12px; overflow: hidden; }
+.distribution-bar-fill { background: var(--primary, #1F6FB2); height: 100%; border-radius: 5px; transition: width .2s ease; }
+.distribution-count { width: 90px; text-align: right; white-space: nowrap; color: var(--text-muted, #7C8C9B); }
+@media (max-width: 960px) {
+  .students-grid { grid-template-columns: 1fr; }
 }

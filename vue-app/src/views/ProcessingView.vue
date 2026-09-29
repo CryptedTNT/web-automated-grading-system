@@ -15,6 +15,7 @@ import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { useProcessingStore } from '@/stores/processing.js'
+import { sessionLabel, sessionTag, nextSessionNumber, refreshSessionNumbers } from '@/services/sessionNumbers.js'
 
 const router = useRouter()
 const store = useAppStore()
@@ -39,6 +40,7 @@ async function loadJobDetails() {
 onMounted(() => {
   job.syncQueue()
   loadJobDetails()
+  refreshSessionNumbers()
 })
 watch(() => store.selectedAnswerKeyId, loadJobDetails)
 
@@ -56,16 +58,16 @@ const startDisabled = computed(
 const countLabel = computed(() => `${job.completed} / ${job.total || groups.value.length} submissions`)
 
 const currentLabel = computed(() => {
-  if (job.isRunning && job.cancelRequested) return 'Cancelling after the current submission...'
-  if (job.isRunning && job.currentFile) return `Processing ${job.currentFile}`
-  if (job.status === 'completed') return `Session #${job.sessionId} is ready for review.`
-  if (job.status === 'cancelled') return `Session #${job.sessionId} was cancelled.`
-  if (job.status === 'error') return job.error || 'Processing failed.'
+  if (job.isRunning && job.cancelRequested) return 'Cancelling...'
+  if (job.isRunning && job.currentFile) return `Grading ${job.currentFile}`
+  if (job.status === 'completed') return `${sessionLabel(job.sessionId)} is ready for review.`
+  if (job.status === 'cancelled') return `Cancelled. It did not use a session number -- the next run is still Session #${nextSessionNumber()}.`
+  if (job.status === 'error') return job.error || 'Grading failed.'
   return groups.value.length ? `${groups.value.length} submission(s) ready.` : 'No submissions are queued.'
 })
 
 const emptyLogMessage = computed(
-  () => job.error || 'Ready. Start processing when the answer key and upload queue are complete.',
+  () => job.error || 'Ready. Start grading when the questionnaire and upload queue are complete.',
 )
 
 /* Keep the newest line visible, the way the manual log.scrollTop
@@ -87,9 +89,9 @@ function openResults() {
 <template>
   <div>
     <div class="title-block">
-      <div class="page-title">Processing Answer Sheets</div>
+      <div class="page-title">Grade Answer Sheets</div>
       <div class="page-subtitle">
-        Run automated grading and create reviewable results.
+        Grade uploaded answer sheets and create results for review.
       </div>
     </div>
 
@@ -102,7 +104,7 @@ function openResults() {
       <section class="card workflow-main">
         <div class="processing-heading">
           <div>
-            <div class="card-title">Processing Queue</div>
+            <div class="card-title">Grading Queue</div>
             <div class="muted-text">{{ currentLabel }}</div>
           </div>
           <span class="badge" :class="job.statusBadgeClass">{{ job.statusLabel }}</span>
@@ -136,7 +138,7 @@ function openResults() {
       </section>
 
       <aside class="card workflow-sidebar processing-sidebar">
-        <div class="card-title">Job Details</div>
+        <div class="card-title">Grading Details</div>
         <dl class="job-details">
           <div><dt>Answer key</dt><dd>{{ answerKey?.name || 'Not selected' }}</dd></div>
           <div><dt>Key items</dt><dd>{{ keyItems.length }}</dd></div>
@@ -144,7 +146,7 @@ function openResults() {
           <div><dt>Queued pages</dt><dd>{{ totalPages }}</dd></div>
           <div>
             <dt>Session</dt>
-            <dd>{{ job.sessionId ? `#${job.sessionId}` : 'Not created' }}</dd>
+            <dd>{{ job.sessionId ? sessionTag(job.sessionId) : 'Not created' }}</dd>
           </div>
         </dl>
         <div class="workflow-actions vertical-actions">
@@ -157,7 +159,7 @@ function openResults() {
             :disabled="job.cancelRequested"
             @click="job.cancel()"
           >
-            {{ job.cancelRequested ? 'Cancelling...' : 'Cancel Processing' }}
+            {{ job.cancelRequested ? 'Cancelling...' : 'Cancel Grading' }}
           </button>
           <button class="btn btn-success w-full" :disabled="!canOpenResults" @click="openResults">
             Open Results

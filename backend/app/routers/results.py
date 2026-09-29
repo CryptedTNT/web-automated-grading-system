@@ -20,12 +20,14 @@ from app.models import (
     GradingSession,
     ManualReview,
     StudentAnswer,
+    StudentInfo,
     VFlaggedQueue,
     VResultItem,
     VSheetResult,
 )
-from app.schemas import ReviewRequest
+from app.schemas import ReviewRequest, UpdateStudentIdentityRequest
 from app.security import get_current_faculty
+from app.sections import canonical_section
 
 router = APIRouter(tags=["results"])
 
@@ -117,6 +119,35 @@ def session_results(
 @router.get("/sheets/{sheet_id}")
 def sheet_result(sheet_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
     _owned_sheet_id(sheet_id, faculty, db)
+    row = db.scalar(select(VSheetResult).where(VSheetResult.sheet_id == sheet_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Sheet not found.")
+    return _sheet_shape(row)
+
+
+@router.patch("/sheets/{sheet_id}/identity")
+def update_sheet_identity(
+    sheet_id: int,
+    body: UpdateStudentIdentityRequest,
+    faculty: Faculty = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """Correct the OCR-read name/section for one teacher-owned submission.
+
+    The ownership check is deliberately performed before reading or writing
+    ``student_info``.  A signed-in teacher must never be able to change a
+    different teacher's student just by guessing a sheet id.
+    """
+    _owned_sheet_id(sheet_id, faculty, db)
+    info = db.scalar(select(StudentInfo).where(StudentInfo.sheet_id == sheet_id))
+    if not info:
+        raise HTTPException(status_code=404, detail="Student details not found.")
+
+    info.name = body.name
+    info.section = canonical_section(body.section)
+    db.add(info)
+    db.commit()
+
     row = db.scalar(select(VSheetResult).where(VSheetResult.sheet_id == sheet_id))
     if not row:
         raise HTTPException(status_code=404, detail="Sheet not found.")

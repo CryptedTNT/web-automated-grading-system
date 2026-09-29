@@ -137,10 +137,12 @@ LEFT JOIN manual_review  mr ON mr.result_id         = gr.result_id;
 -- in the order the Review Flagged page walks them.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_flagged_queue AS
-SELECT *
-FROM v_result_item
-WHERE status = 'flagged'
-ORDER BY session_id, sheet_id, item_no;
+SELECT vri.*
+FROM v_result_item vri
+JOIN grading_session gs ON gs.session_id = vri.session_id
+WHERE vri.status = 'flagged'
+  AND gs.status <> 'cancelled'
+ORDER BY vri.session_id, vri.sheet_id, vri.item_no;
 
 -- ---------------------------------------------------------------------
 -- v_session_summary -- one row per processing run.
@@ -182,6 +184,7 @@ SELECT
     COALESCE(ROUND(AVG(vsr.percentage), 2), 0)  AS average
 FROM faculty f
 LEFT JOIN grading_session gs  ON gs.faculty_id = f.faculty_id
+                              AND gs.status <> 'cancelled'
 LEFT JOIN v_sheet_result  vsr ON vsr.session_id = gs.session_id
 GROUP BY f.faculty_id;
 
@@ -209,6 +212,8 @@ SELECT
     ROUND(AVG(gr.match_score), 2)                       AS mean_match_score
 FROM grading_result gr
 JOIN exam_sheet      es  ON es.sheet_id = gr.sheet_id
+JOIN grading_session gs  ON gs.session_id = es.session_id
+                          AND gs.status <> 'cancelled'
 JOIN answer_key_item aki ON aki.item_id = gr.item_id
 LEFT JOIN student_answer sa ON sa.student_answer_id = gr.recognized_id
 GROUP BY es.session_id, aki.question_type, sa.model_used;

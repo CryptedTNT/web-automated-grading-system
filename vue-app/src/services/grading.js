@@ -57,6 +57,21 @@ export function similarity(a, b) {
   return Math.round((1 - editDistance / maxLen) * 100)
 }
 
+const EXACT_MATCH_SCORE = 99.99
+
+function alternativesFor(item) {
+  return String(item.alternatives || '')
+    .split(/[,;\n]/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
+
+function bestItemSimilarity(item, text) {
+  return Math.max(
+    ...[item.correct_answer, ...alternativesFor(item)].map((candidate) => similarity(candidate, text)),
+  )
+}
+
 /**
  * Matches detected answers against the correct answers for one
  * Enumeration group.
@@ -89,7 +104,7 @@ export function matchEnumerationAnswers(correctItems, detectedAnswers) {
   const pairs = []
   correctItems.forEach((item, slotIndex) => {
     detected.forEach((d) => {
-      pairs.push({ slotIndex, detectedIndex: d.index, score: similarity(item.correct_answer, d.text) })
+      pairs.push({ slotIndex, detectedIndex: d.index, score: bestItemSimilarity(item, d.text) })
     })
   })
   pairs.sort((a, b) => b.score - a.score)
@@ -113,7 +128,11 @@ export function matchEnumerationAnswers(correctItems, detectedAnswers) {
     const points = Number(item.points) || 0
     totalPossible += points
     const match = assignment.get(slotIndex)
-    const earned = match ? points : 0
+    const exact = Boolean(match && match.score >= EXACT_MATCH_SCORE)
+    // A near match claims one detected answer so it cannot be re-used by a
+    // second enumeration slot, but it remains flagged for the teacher and
+    // earns no automatic point. Only exact matches score automatically.
+    const earned = exact ? points : 0
     totalEarned += earned
     return {
       item_no: item.item_no,
@@ -121,6 +140,7 @@ export function matchEnumerationAnswers(correctItems, detectedAnswers) {
       matched_answer: match ? detectedByIndex.get(match.detectedIndex) : null,
       match_score: match ? match.score : 0,
       matched: Boolean(match),
+      exact,
       points,
       earned,
     }

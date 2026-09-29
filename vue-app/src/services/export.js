@@ -6,15 +6,41 @@
    Results and Reports pages needed it. It is a service here for the
    same reason — it is not view logic and neither page should own it.
 
-   SheetJS (XLSX) is a global from the CDN script tag in index.html,
-   not an npm import: the maintainers no longer publish `xlsx` to the
-   public registry. The `typeof XLSX !== 'undefined'` guard is kept
-   from the original, so a blocked CDN degrades to CSV rather than
-   throwing.
+   SheetJS (XLSX) is a global from its CDN, not an npm import: the
+   maintainers no longer publish `xlsx` to the public registry. It is
+   loaded the first time someone exports (loadSheetJs below) instead of
+   by a script tag in index.html, where its 288 KB blocked the first
+   paint of every page. If the CDN cannot be reached the export
+   degrades to CSV rather than throwing, as before.
    ============================================================ */
 
 import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
+
+const SHEETJS_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'
+const SHEETJS_INTEGRITY = 'sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT'
+let sheetJsLoading = null
+
+/* Resolves true once the global XLSX exists, false if it could not be loaded. */
+function loadSheetJs() {
+  if (typeof XLSX !== 'undefined') return Promise.resolve(true)
+  if (!sheetJsLoading) {
+    sheetJsLoading = new Promise((resolve) => {
+      const tag = document.createElement('script')
+      tag.src = SHEETJS_URL
+      tag.integrity = SHEETJS_INTEGRITY
+      tag.crossOrigin = 'anonymous'
+      tag.onload = () => resolve(typeof XLSX !== 'undefined')
+      tag.onerror = () => {
+        tag.remove()
+        sheetJsLoading = null // allow a retry on the next export
+        resolve(false)
+      }
+      document.head.appendChild(tag)
+    })
+  }
+  return sheetJsLoading
+}
 
 /* Excel/LibreOffice treat any cell that STARTS WITH =, +, -, @, or a tab
    evaluate it as a formula regardless of whether the file is .xlsx or
@@ -32,16 +58,16 @@ function sanitizeRows(rows) {
   return rows.map((row) => row.map(sanitizeCell))
 }
 
-export async function exportSessionToFile(sessionId) {
+export async function exportSessionToFile(sessionId, { announce = true } = {}) {
   const id = parseInt(sessionId) || null
   if (!id) {
-    showMessage('No Session', 'No grading session to export.')
+    if (announce) showMessage('No Session', 'No grading session to export.')
     return null
   }
 
   const results = await API.studentResults(id)
   if (!results.length) {
-    showMessage('No Data', 'No results in this session to export.')
+    if (announce) showMessage('No Data', 'No results in this session to export.')
     return null
   }
 
@@ -51,7 +77,7 @@ export async function exportSessionToFile(sessionId) {
   const detailData = prefs.include_item_scores ? sanitizeRows(await buildDetailRows(results, prefs)) : null
   const forceCsv = /\.csv$/i.test(requestedFilename)
 
-  if (!forceCsv && typeof XLSX !== 'undefined') {
+  if (!forceCsv && (await loadSheetJs())) {
     const filename = requestedFilename.replace(/\.csv$/i, '.xlsx')
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summaryData), 'Results')
@@ -59,7 +85,7 @@ export async function exportSessionToFile(sessionId) {
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(detailData), 'Item Details')
     }
     XLSX.writeFile(workbook, filename)
-    showMessage('Exported', `Excel file downloaded: ${filename}`)
+    if (announce) showMessage('Exported', `Excel file downloaded: ${filename}`)
     return filename
   }
 
@@ -69,7 +95,7 @@ export async function exportSessionToFile(sessionId) {
       ? [...summaryData, [], ['Item Details'], ...detailData]
       : summaryData
   downloadCsv(csvRows, filename)
-  showMessage('Exported', `CSV file downloaded: ${filename}`)
+  if (announce) showMessage('Exported', `CSV file downloaded: ${filename}`)
   return filename
 }
 
@@ -97,7 +123,7 @@ async function buildDetailRows(results, prefs) {
   if (prefs.include_question_type) header.push('Type')
   header.push('Student Answer', 'Correct Answer')
   header.push('Match %', 'Points', 'Earned')
-  header.push('Status', 'Model')
+  header.push('Status')
   if (prefs.include_flagged_notes) header.push('Remarks')
 
   const itemLists = await Promise.all(results.map((result) => API.resultItems(result.id)))
@@ -111,7 +137,7 @@ async function buildDetailRows(results, prefs) {
       if (prefs.include_question_type) row.push(item.type || '')
       row.push(item.student_answer || '', item.correct_answer || '')
       row.push(item.match_score || 0, item.points || 0, item.earned || 0)
-      row.push(item.status || '', item.model_used || '')
+      row.push(item.status || '')
       if (prefs.include_flagged_notes) row.push(item.remarks || '')
       rows.push(row)
     }

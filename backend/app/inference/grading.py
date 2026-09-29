@@ -17,6 +17,13 @@ from dataclasses import dataclass
 from rapidfuzz.distance import Levenshtein
 
 
+# Similarity() returns an exact normalized string match as 100.  Keeping a
+# tiny tolerance avoids a floating-point representation edge case while still
+# meaning "exact" to a teacher; anything below this must be reviewed or is
+# wrong according to the answer key's own threshold.
+EXACT_MATCH_SCORE = 99.99
+
+
 def similarity(a: str | None, b: str | None) -> float:
     """Case/whitespace-insensitive Levenshtein similarity, 0-100.
 
@@ -44,6 +51,18 @@ def _split_alternatives(alternatives: str | None) -> list[str]:
     if not alternatives:
         return []
     return [a.strip() for a in re.split(r"[,;\n]", alternatives) if a.strip()]
+
+
+def best_item_similarity(item, recognized: str | None) -> float:
+    """Best enumeration similarity against an answer and its alternatives.
+
+    Enumeration is set-matched, but an allowed alternative is still a valid
+    answer for the same slot. Without this helper, an exact alternative could
+    be incorrectly treated as a low-similarity response just because only the
+    primary ``correct_answer`` was compared.
+    """
+    candidates = [item.correct_answer, *_split_alternatives(getattr(item, "alternative_answers", None))]
+    return max((similarity(recognized, candidate) for candidate in candidates), default=0.0)
 
 
 @dataclass
@@ -146,6 +165,7 @@ class EnumSlotResult:
     matched_answer: str | None
     match_score: float
     matched: bool
+    is_exact: bool
     points: float
     earned: float
     # Which entry of the group's detected_answers list actually earned this
@@ -178,7 +198,7 @@ def match_enumeration_answers(items: list, detected_answers: list[str | None]) -
     pairs: list[tuple[float, int, int]] = []
     for slot_index, item in enumerate(items):
         for detected_index, text in detected:
-            pairs.append((similarity(item.correct_answer, text), slot_index, detected_index))
+            pairs.append((best_item_similarity(item, text), slot_index, detected_index))
     pairs.sort(key=lambda p: p[0], reverse=True)
 
     used_slots: set[int] = set()
@@ -202,7 +222,11 @@ def match_enumeration_answers(items: list, detected_answers: list[str | None]) -
         points = float(item.points)
         total_possible += points
         match = assignment.get(slot_index)
-        earned = points if match else 0.0
+        is_exact = bool(match and match[1] >= EXACT_MATCH_SCORE)
+        # A threshold match reserves its detected answer for this slot so it
+        # cannot be double-counted elsewhere, but it earns no automatic point
+        # until a teacher confirms it. Only an exact normalized match scores.
+        earned = points if is_exact else 0.0
         total_earned += earned
         per_slot.append(
             EnumSlotResult(
@@ -210,6 +234,7 @@ def match_enumeration_answers(items: list, detected_answers: list[str | None]) -
                 matched_answer=detected_by_index.get(match[0]) if match else None,
                 match_score=match[1] if match else 0.0,
                 matched=bool(match),
+                is_exact=is_exact,
                 points=points,
                 earned=earned,
                 detected_index=match[0] if match else None,

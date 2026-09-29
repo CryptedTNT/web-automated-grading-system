@@ -74,7 +74,7 @@ sudo apt update && sudo apt -y upgrade
 sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
-sudo apt install -y python3.13 python3.13-venv python3.13-dev build-essential mysql-server caddy
+sudo apt install -y python3.13 python3.13-venv python3.13-dev build-essential mysql-server caddy libgl1 libglib2.0-0
 ```
 
 Add 4 GB of swap as a safety net for the two models:
@@ -208,6 +208,8 @@ PC: rebuild (`npm run build` in `vue-app`), repeat the `tar.exe` and first `scp`
 ```
 sudo tar xzf /tmp/ags.tar.gz -C /opt/ags --strip-components=1
 sudo chown -R ags:ags /opt/ags
+sudo -u ags /opt/ags/backend/venv/bin/pip install -r /opt/ags/backend/requirements.txt
+sudo mysql ags_db < /opt/ags/database/migrations/R__views.sql
 sudo systemctl restart ags-backend
 ```
 
@@ -215,13 +217,15 @@ sudo systemctl restart ags-backend
 
 ## Known limits
 
-- **Speed:** no GPU. Measured on a desktop CPU: about 1.5 minutes for a 24-answer sheet (about 3.6 s per answer,
-  against about 5 s per sheet on the RTX 3070). A small Azure VM will probably be slower, and B-series VMs are
-  "burstable" -- sustained grading can be throttled. If that is a problem, resize the VM (Portal -> VM -> Size) to
-  `D2as_v5` or `D4as_v5`. For the defense itself, running the app on your own GPU PC is free and much faster.
-- **One sheet at a time:** the upload endpoint (`async def upload_sheets` in `backend/app/routers/sessions.py`) runs
-  the model inside the request, so while one sheet is being graded other requests wait. Fine for a handful of
-  teachers taking turns; tell them to upload one sheet at a time. Running the grading in a thread pool would fix it.
+- **Speed:** no GPU. Each answer is read greedily first and re-read with beam search only when the model is unsure
+  (about 6% of crops; same accuracy on the test split). Measured on a desktop CPU limited to 2 threads: about 26
+  seconds for a 24-answer sheet (about 1.1 s per answer; it was about 87 s before this change), against about 5
+  seconds on the RTX 3070. A small Azure VM will probably be slower, and B-series VMs are "burstable" -- sustained
+  grading can be throttled. If that is a problem, resize the VM (Portal -> VM -> Size) to `D2as_v5` or `D4as_v5`.
+  For the defense itself, running the app on your own GPU PC is free and much faster.
+- **Several teachers at once:** the model runs in a worker thread (`asyncio.to_thread` in
+  `backend/app/routers/sessions.py`), so the site stays responsive while a sheet is grading. Two sheets graded at the
+  same moment share the same CPU cores, so each one takes longer -- with 2 vCPUs, ask teachers to take turns.
 - **Long uploads:** I have not tested how Azure handles a request that stays open for several minutes. Keep to a few
   pages per upload while testing.
 

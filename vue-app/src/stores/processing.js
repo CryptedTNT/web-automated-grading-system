@@ -12,13 +12,19 @@ import { defineStore } from 'pinia'
 import { API } from '@/services/api.js'
 import { useAppStore } from './app.js'
 import { showMessage } from '@/services/dialog.js'
+import { sessionLabel, nextSessionNumber, refreshSessionNumbers } from '@/services/sessionNumbers.js'
 
 /* Not part of state: it holds a promise, and nothing renders it. */
 let runningPromise = null
+/* Also not part of state, same reason -- the controller for whichever
+   upload request is currently in flight, so cancel() can abort it
+   directly instead of only setting a flag the loop can't check until
+   that request already resolves. */
+let currentAbortController = null
 
 const STATUS_LABELS = {
   idle: 'Ready',
-  running: 'Processing',
+  running: 'Grading',
   completed: 'Completed',
   error: 'Failed',
   cancelled: 'Cancelled',
@@ -54,11 +60,11 @@ export const useProcessingStore = defineStore('processing', {
     statusBadgeClass: (state) => STATUS_BADGES[state.status] || STATUS_BADGES.idle,
     startButtonLabel: (state) =>
       ({
-        running: state.cancelRequested ? 'Cancelling...' : 'Processing...',
+        running: state.cancelRequested ? 'Cancelling...' : 'Grading...',
         completed: 'Completed',
-        error: 'Retry Processing',
-        cancelled: 'Restart Processing',
-      })[state.status] || 'Start Processing',
+        error: 'Retry Grading',
+        cancelled: 'Restart Grading',
+      })[state.status] || 'Start Grading',
   },
 
   actions: {
@@ -86,13 +92,17 @@ export const useProcessingStore = defineStore('processing', {
       this.sourceSignature = signature
     },
 
-    /* Asks the adapter to stop after the file it is on. Records already
-       written stay — the session is marked Cancelled, not deleted, so a
-       teacher can still open the partial results. */
+    /* Aborts whichever submission is currently uploading/grading right
+       now, rather than waiting for it to finish before the loop notices
+       cancelRequested -- on a slow (CPU-only) deployment that request
+       can take a minute or more, which is what made Cancel look stuck.
+       The server discards the entire cancelled run, including any earlier
+       completed submissions, so it cannot appear as a partial report. */
     cancel() {
       if (this.status !== 'running' || this.cancelRequested) return
       this.cancelRequested = true
-      this.appendLog('Cancelling after the current image...', 'error')
+      currentAbortController?.abort()
+      this.appendLog('Cancelling...', 'error')
     },
 
     async start() {
@@ -127,7 +137,7 @@ export const useProcessingStore = defineStore('processing', {
       this.status = 'running'
       this.total = groups.length
       this.sourceSignature = queueSignature(keyId, groups)
-      this.appendLog('Starting processing.')
+      this.appendLog('Starting grading.')
 
       runningPromise = this._run(groups, keyId)
       try {
@@ -153,7 +163,8 @@ export const useProcessingStore = defineStore('processing', {
         sessionId = await API.createSession(keyId, sourceLabel(groups))
         this.sessionId = sessionId
         app.currentSessionId = sessionId
-        this.appendLog(`Session #${sessionId} created with ${groups.length} student submission(s).`)
+        await refreshSessionNumbers() // the new run shows the number it gets IF it finishes (see sessionNumbers.js)
+        this.appendLog(`${sessionLabel(sessionId)} created with ${groups.length} student submission(s).`)
 
         for (let index = 0; index < groups.length; index += 1) {
           if (this.cancelRequested) {
@@ -171,15 +182,42 @@ export const useProcessingStore = defineStore('processing', {
           // 50-submission batch -- a single oversized photo or transient
           // network blip on submission #10 shouldn't cost #11-50 too.
           // Logging it and moving on keeps the rest of the run's progress.
+          currentAbortController = new AbortController()
           try {
-            await API.uploadSheetGroup(sessionId, group.pages.map((entry) => entry.file), app.consentConfirmed)
+            const uploaded = await API.uploadSheetGroup(
+              sessionId,
+              group.pages.map((entry) => entry.file),
+              app.consentConfirmed,
+              currentAbortController.signal,
+            )
+            if (uploaded?.cancelled) {
+              // The server stopped grading this submission and discarded it
+              // (the session was cancelled from elsewhere) -- not "graded".
+              this.appendLog(`[${index + 1}/${groups.length}] ${this.currentFile} cancelled.`, 'error')
+              break
+            }
             this.appendLog(`[${index + 1}/${groups.length}] ${this.currentFile} graded.`, 'success')
           } catch (error) {
+            if (error.name === 'AbortError') {
+              // cancel() already set cancelRequested and logged "Cancelling...";
+              // the request stops waiting immediately. The PATCH to
+              // 'Cancelled' right after this loop is what tells the server
+              // to stop grading the sheet it is on (at its next checkpoint,
+              // within about one recognition) and discard it, rather than
+              // keep the CPU busy for minutes on a sheet nobody wants.
+              this.appendLog(
+                `[${index + 1}/${groups.length}] ${this.currentFile} cancelled.`,
+                'error',
+              )
+              break
+            }
             failedCount += 1
             this.appendLog(
               `[${index + 1}/${groups.length}] ${this.currentFile} failed to upload: ${error.message || error}`,
               'error',
             )
+          } finally {
+            currentAbortController = null
           }
 
           this.completed = index + 1
@@ -188,17 +226,34 @@ export const useProcessingStore = defineStore('processing', {
 
         if (this.cancelRequested) {
           await API.updateSessionStatus(sessionId, 'Cancelled')
+          await refreshSessionNumbers()
           this.status = 'cancelled'
           this.currentFile = ''
+          this.sessionId = null
+          app.currentSessionId = null
           /* The queue is left intact so the run can simply be restarted. */
           this.appendLog(
-            `Session #${sessionId} cancelled. Records created so far were kept.`,
+            `Run cancelled and discarded. The next completed run is still Session #${nextSessionNumber()}.`,
             'error',
           )
-          return sessionId
+          return null
+        }
+
+        /* A run in which nothing could be graded did not finish
+           successfully, so it must not count as a session (and use up
+           a number) either. The queue is kept so it can be retried. */
+        if (failedCount === groups.length) {
+          await API.updateSessionStatus(sessionId, 'Failed')
+          await refreshSessionNumbers()
+          this.status = 'error'
+          this.error = 'None of the submissions could be graded, so this run does not count as a session. See the log for why, then retry.'
+          this.currentFile = ''
+          this.appendLog(`Run failed: none of the ${groups.length} submission(s) could be graded.`, 'error')
+          return null
         }
 
         await API.updateSessionStatus(sessionId, 'Completed')
+        await refreshSessionNumbers()
         this.status = 'completed'
         this.progress = 100
         this.completed = this.total
@@ -208,13 +263,16 @@ export const useProcessingStore = defineStore('processing', {
         app.uploadFiles = []
         this.appendLog(
           failedCount
-            ? `Session #${sessionId} completed with ${failedCount} of ${groups.length} submission(s) that failed to upload -- see the log above for which. Open Results to review what graded successfully.`
-            : `Session #${sessionId} completed. Open Results to continue.`,
+            ? `${sessionLabel(sessionId)} completed with ${failedCount} of ${groups.length} submission(s) that failed to upload -- see the log above for which. Open Results to review what graded successfully.`
+            : `${sessionLabel(sessionId)} completed. Open Results to continue.`,
           failedCount ? 'error' : 'success',
         )
         return sessionId
       } catch (error) {
-        if (sessionId) await API.updateSessionStatus(sessionId, 'Failed')
+        if (sessionId) {
+          await API.updateSessionStatus(sessionId, 'Failed')
+          await refreshSessionNumbers()
+        }
         this.status = 'error'
         this.error = error.message || 'The processing job failed.'
         this.currentFile = ''
