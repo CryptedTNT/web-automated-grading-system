@@ -166,7 +166,7 @@ function clearInvalid(field) {
       </div>
 
       <div class="spacer"></div>
-      <div class="muted-text text-center">© 2027 AGS. Web-based application.</div>
+      <div class="muted-text text-center">© 2026 AGS. Web-based application.</div>
       <div class="muted-text text-center mt-8">
         <LegalDocumentLink document="terms">Terms</LegalDocumentLink> ·
         <LegalDocumentLink document="privacy">Privacy</LegalDocumentLink> ·

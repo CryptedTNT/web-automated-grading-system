@@ -171,19 +171,29 @@ export function questionnaireHtml(title, items) {
     .blank { display: inline-block; min-width: 60px; border-bottom: 1px solid #111827; margin-right: 6px; }
     .section-identification .blank { min-width: 90px; }
     .section-enumeration .blank { min-width: 180px; }
-    .choices { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; margin: 2px 0 10px 66px; color: #4b5563; font-size: 9px; }
+    .choices { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 16px; margin: 2px 0 10px 66px; color: #4b5563; font-size: 9px; }
     .mc-hint { font-style: italic; color: #6b7280; font-size: 12px; }
     .enum-blanks { margin-left: 20px; }
     .blank-line { margin: 6px 0; }
     .print { margin: 0 0 18px; padding: 9px 16px; border: 0; border-radius: 6px; background: #1f6fb2; color: white; cursor: pointer; font-weight: 600; }
     .print:hover { background: #185c96; }
-    /* The actual paper margin used when printing/saving as PDF -- distinct
-       from .preview-page-content's padding below, which only affects the
-       on-screen preview's page boxes. Auto-pagination for overflowing
-       content is the browser's native print behavior; this just makes it
-       1" on every sheet instead of whatever the browser/printer defaults
-       to. */
-    @page { size: A4; margin: 1in; }
+    /* @page margin is 0, not 1in -- Chrome/Edge/Firefox draw their own print
+       header (page title = the answer key's name, and the URL, "about:blank"
+       for a window.open('') preview) and footer (date and page number)
+       INSIDE the @page margin area, and stop drawing them once that area
+       is 0 (there is nowhere left to put them). A teacher who wants them
+       back can still tick "Headers and footers" in the print dialog.
+
+       The 1in paper margin is rebuilt inside the document instead. Body
+       padding is NOT enough: it applies once to the whole document, so
+       only the first page got a top margin and only the last got a
+       bottom one (measured in Chrome: page 2 text started at 0pt, page 1
+       ended 5pt from the paper edge). A table's <thead> and <tfoot> are
+       repeated by the browser on every printed page, so #flow is wrapped
+       in a table whose header and footer are 1in spacers -- that gives
+       every page its own top and bottom margin. Left/right margin is
+       plain padding, which is the same on every page. */
+    @page { size: A4; margin: 0; }
 
     /* #flow is the one real, unbroken copy of the document -- what
        @media print below actually lays out onto paper, completely
@@ -211,14 +221,29 @@ export function questionnaireHtml(title, items) {
     @media print {
       #pages { display: none; }
       #flow { display: block; }
+      /* Left/right paper margin. Top/bottom come from the .print-frame
+         table's repeating header/footer (see the @page comment above). */
       body { margin: 0; max-width: none; padding: 0; }
+      #flow { padding: 0 1in; }
       .print { display: none; }
     }
+    .print-frame { width: 100%; border-collapse: collapse; }
+    .print-frame td { padding: 0; }
+    .print-margin { height: 1in; }
+    /* A long word with no spaces (a URL, an identifier) makes its grid cell
+       wider than the page; Chrome then shrinks the WHOLE printout to fit,
+       which is what made the text of some printouts tiny. Let such words
+       wrap inside their cell instead. */
+    .q-line, .q-prompt, .blank-line, .choices span { overflow-wrap: anywhere; min-width: 0; }
   </style>
 </head>
 <body>
   <button class="print" onclick="window.print()">Print</button>
   <div id="flow">
+    <table class="print-frame">
+      <thead><tr><td><div class="print-margin"></div></td></tr></thead>
+      <tfoot><tr><td><div class="print-margin"></div></td></tr></tfoot>
+      <tbody><tr><td id="flow-content">
     <div class="fields">
       <div class="field-row">Name:<div class="line"></div></div>
       <div class="field-row">Date:<div class="line"></div></div>
@@ -226,6 +251,8 @@ export function questionnaireHtml(title, items) {
       <div class="field-row">Score:<div class="line"></div></div>
     </div>
     ${sectionsHtml}
+      </td></tr></tbody>
+    </table>
   </div>
   <div id="pages"></div>
 </body>
@@ -244,7 +271,7 @@ export function questionnaireHtml(title, items) {
    original content untouched for print while #pages gets its own
    independent, safely-splittable copies for the on-screen preview. */
 export function paginatePreview(doc) {
-  const flow = doc.getElementById('flow')
+  const flow = doc.getElementById('flow-content') // the table cell inside #flow that holds the real content
   const pages = doc.getElementById('pages')
   const nodes = Array.from(flow.children).map((node) => node.cloneNode(true))
 

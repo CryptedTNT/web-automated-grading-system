@@ -7,7 +7,7 @@
    preview/print a sheet styled after the paper exam template.
    ============================================================ */
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import {
   BorderStyle,
   Document,
@@ -37,6 +37,8 @@ const keys = ref([])
 const currentKeyId = ref(null)
 const creatingNew = ref(false)
 const keyName = ref('')
+const validationAttempted = ref(false)
+const invalidFields = ref(new Set())
 
 /* Test sections, in the order the teacher built them -- each one picks
    its own question type from a dropdown (see qbSectionHeader in the
@@ -321,6 +323,154 @@ function removeEnumBlank(group, uid) {
   group.blanks = group.blanks.filter((b) => b.uid !== uid)
 }
 
+/* The backend rejects fuzzy_threshold outside 0-100 (schemas.py's
+   AnswerKeyItemIn), but nothing stopped a teacher from typing -5 or 500
+   into these fields first -- clamped on blur so the field itself always
+   shows a valid value, and again in collectItems() below as the actual
+   guard against whatever a v-model.number binding lets through. */
+function clampThreshold(item) {
+  const n = Number(item.threshold)
+  item.threshold = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 85
+}
+/* Same limit, applied on every keystroke: a value typed or stepped outside
+   0-100 snaps back at once instead of sitting in the field until it loses
+   focus. An empty field (mid-edit) is left alone here; blur fills it in. */
+function limitThreshold(item) {
+  const n = item.threshold
+  if (n === '' || n === null || n === undefined) return
+  const value = Number(n)
+  if (Number.isFinite(value) && (value < 0 || value > 100)) item.threshold = Math.min(100, Math.max(0, value))
+}
+function clampedInt(value) {
+  return Math.min(100, Math.max(0, parseInt(value) || 85))
+}
+
+/* Which required fields a row/group is still missing, keyed by the
+   same shape collectItems() reads -- used both for a per-row marker
+   and the page-level summary banner below. collectItems() itself never
+   blocks on these (a row missing everything is just silently dropped,
+   see its own per-type checks above each push()), so a row that's
+   PARTLY filled in -- e.g. three MC choices typed and the fourth left
+   blank -- would otherwise save/print/grade with a blank nobody
+   noticed until a student pointed at question 7 with no choice D. */
+function mcIssues(item) {
+  const issues = []
+  if (!item.question_text.trim()) issues.push('question text')
+  MC_LETTERS.forEach((l) => { if (!String(item.choices[l]).trim()) issues.push(`choice ${l.toUpperCase()}`) })
+  if (!item.correct.length) issues.push('correct answer')
+  return issues
+}
+function tfIssues(item) {
+  const issues = []
+  if (!item.question_text.trim()) issues.push('statement text')
+  if (!item.correct) issues.push('correct answer')
+  return issues
+}
+function idIssues(item) {
+  const issues = []
+  if (!item.question_text.trim()) issues.push('question text')
+  if (!String(item.correct).trim()) issues.push('correct answer')
+  return issues
+}
+function enumGroupIssues(group) {
+  const issues = []
+  if (!group.question_text.trim()) issues.push('prompt')
+  if (group.blanks.some((b) => !String(b.correct).trim())) issues.push('an accepted answer on every blank')
+  return issues
+}
+const ISSUE_CHECKERS = {
+  'Multiple Choice': mcIssues,
+  'True or False': tfIssues,
+  Identification: idIssues,
+  Enumeration: enumGroupIssues,
+}
+
+/* Every incomplete row/group across the whole questionnaire, with a
+   human label ("Multiple Choice #2") -- drives the summary banner near
+   Save/Preview so a partly-filled question is noticed on the page as a
+   whole, not only by scanning every row for the per-item marker. */
+const incompleteItems = computed(() => {
+  const found = []
+  qbSections.value.forEach((section) => {
+    const check = ISSUE_CHECKERS[section.type]
+    if (!check) return
+    section.items.forEach((item, idx) => {
+      // A fresh, completely blank row is an unused draft row. Once a
+      // teacher starts a row, every required field must be completed.
+      if (!itemHasContent(section.type, item)) return
+      const issues = check(item)
+      if (issues.length) found.push({ label: `${section.type} #${idx + 1}`, issues })
+    })
+  })
+  return found
+})
+
+function fieldKey(section, item, field) {
+  return `${section.uid}:${item.uid}:${field}`
+}
+
+function isInvalid(key) {
+  return invalidFields.value.has(key)
+}
+
+function clearInvalid(key) {
+  if (!invalidFields.value.has(key)) return
+  const next = new Set(invalidFields.value)
+  next.delete(key)
+  invalidFields.value = next
+}
+
+function itemHasInvalidField(section, item) {
+  const prefix = `${section.uid}:${item.uid}:`
+  return [...invalidFields.value].some((key) => key.startsWith(prefix))
+}
+
+/* Returns exact missing controls rather than a row-level warning only.
+   The first one is scrolled into view and focused after Save is pressed. */
+function validateQuestionnaire() {
+  const errors = []
+  const add = (key, label) => errors.push({ key, label })
+
+  if (!keyName.value.trim()) add('questionnaire-name', 'questionnaire name')
+
+  qbSections.value.forEach((section) => {
+    section.items.forEach((item, index) => {
+      if (!itemHasContent(section.type, item)) return
+      const label = `${section.type} question ${index + 1}`
+
+      if (section.type === 'Multiple Choice') {
+        if (!item.question_text.trim()) add(fieldKey(section, item, 'question'), `${label}: question text`)
+        MC_LETTERS.forEach((letter) => {
+          if (!String(item.choices[letter]).trim()) add(fieldKey(section, item, `choice-${letter}`), `${label}: choice ${letter.toUpperCase()}`)
+        })
+        if (!item.correct.length) add(fieldKey(section, item, 'correct'), `${label}: correct answer`)
+      } else if (section.type === 'True or False') {
+        if (!item.question_text.trim()) add(fieldKey(section, item, 'question'), `${label}: statement text`)
+        if (!item.correct) add(fieldKey(section, item, 'correct'), `${label}: correct answer`)
+      } else if (section.type === 'Identification') {
+        if (!item.question_text.trim()) add(fieldKey(section, item, 'question'), `${label}: question text`)
+        if (!String(item.correct).trim()) add(fieldKey(section, item, 'correct'), `${label}: correct answer`)
+      } else if (section.type === 'Enumeration') {
+        if (!item.question_text.trim()) add(fieldKey(section, item, 'question'), `${label}: prompt`)
+        item.blanks.forEach((blank) => {
+          if (!String(blank.correct).trim()) add(fieldKey(section, item, `blank-${blank.uid}`), `${label}: accepted answer`)
+        })
+      }
+    })
+  })
+
+  return errors
+}
+
+async function focusFirstInvalid(errors) {
+  await nextTick()
+  const first = errors[0]
+  if (!first) return
+  const field = document.querySelector(`[data-validation-key="${first.key}"]`)
+  field?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  field?.focus({ preventScroll: true })
+}
+
 /* Flattens qbSections, in the teacher's own section order, into one
    array with freshly computed sequential item_no. A row/group is kept
    if it has any typed content; nothing throws, so saving an untouched
@@ -348,7 +498,7 @@ function collectItems() {
           correct_answer: [...row.correct].sort().join(','),
           alternatives: '',
           points: parseFloat(row.points) || 1,
-          fuzzy_threshold: parseInt(row.threshold) || 85,
+          fuzzy_threshold: clampedInt(row.threshold),
         })
       })
     } else if (section.type === 'True or False') {
@@ -364,7 +514,7 @@ function collectItems() {
           correct_answer: row.correct,
           alternatives: '',
           points: parseFloat(row.points) || 1,
-          fuzzy_threshold: parseInt(row.threshold) || 85,
+          fuzzy_threshold: clampedInt(row.threshold),
         })
       })
     } else if (section.type === 'Identification') {
@@ -381,7 +531,7 @@ function collectItems() {
           correct_answer: correct,
           alternatives: String(row.alternatives).trim(),
           points: parseFloat(row.points) || 1,
-          fuzzy_threshold: parseInt(row.threshold) || 85,
+          fuzzy_threshold: clampedInt(row.threshold),
         })
       })
     } else if (section.type === 'Enumeration') {
@@ -401,7 +551,7 @@ function collectItems() {
             correct_answer: String(b.correct).trim(),
             alternatives: '',
             points: parseFloat(b.points) || 1,
-            fuzzy_threshold: parseInt(b.threshold) || 85,
+            fuzzy_threshold: clampedInt(b.threshold),
           })
         })
       })
@@ -422,10 +572,18 @@ function collectItems() {
 }
 
 async function saveKey() {
-  const name = keyName.value.trim() || 'Untitled Answer Key'
+  validationAttempted.value = true
+  const errors = validateQuestionnaire()
+  invalidFields.value = new Set(errors.map((error) => error.key))
+  if (errors.length) {
+    await focusFirstInvalid(errors)
+    return
+  }
+
+  const name = keyName.value.trim()
   const items = collectItems()
   if (!items.length) {
-    showMessage('No Items', 'Add at least one question before saving.')
+    await showMessage('No Questions', 'Add at least one complete question before saving.')
     return
   }
 
@@ -448,6 +606,8 @@ async function saveKey() {
 
   creatingNew.value = false
   currentKeyId.value = keyId
+  validationAttempted.value = false
+  invalidFields.value = new Set()
   await showMessage('Saved', 'Exam questionnaire saved.')
   await reload(keyId) // reloads from storage and refreshes the dirty snapshot
 }
@@ -794,6 +954,10 @@ onMounted(reload)
             v-model="keyName"
             type="text"
             title="Enter a descriptive name for this exam questionnaire."
+            data-validation-key="questionnaire-name"
+            :class="{ invalid: isInvalid('questionnaire-name') }"
+            :aria-invalid="isInvalid('questionnaire-name')"
+            @input="clearInvalid('questionnaire-name')"
           >
         </div>
 
@@ -820,14 +984,19 @@ onMounted(reload)
 
           <!-- Multiple Choice -->
           <template v-if="section.type === 'Multiple Choice'">
-            <div v-for="(item, idx) in section.items" :key="item.uid" class="mc-card">
+            <div v-for="(item, idx) in section.items" :key="item.uid" class="mc-card" :class="{ 'qb-item-incomplete': itemHasInvalidField(section, item) }">
               <div class="mc-card-header">
                 <span class="qb-index">{{ idx + 1 }}.</span>
+                <span v-if="itemHasInvalidField(section, item)" class="qb-issue-marker" title="Complete the red required fields.">⚠</span>
                 <input
                   v-model="item.question_text"
                   type="text"
                   placeholder="Question text"
                   title="Question text"
+                  :data-validation-key="fieldKey(section, item, 'question')"
+                  :class="{ invalid: isInvalid(fieldKey(section, item, 'question')) }"
+                  :aria-invalid="isInvalid(fieldKey(section, item, 'question'))"
+                  @input="clearInvalid(fieldKey(section, item, 'question'))"
                 >
                 <button
                   class="btn btn-danger btn-small"
@@ -839,12 +1008,15 @@ onMounted(reload)
                 </button>
               </div>
               <div class="mc-choices">
-                <label v-for="letter in MC_LETTERS" :key="letter" class="mc-choice">
+                <label v-for="letter in MC_LETTERS" :key="letter" class="mc-choice" :class="{ invalid: isInvalid(fieldKey(section, item, 'correct')) }">
                   <input
                     v-model="item.correct"
                     type="checkbox"
                     :value="letter"
                     title="Mark as (one of) the correct choice(s) -- check more than one for a select-all-that-apply question."
+                    :data-validation-key="letter === 'a' ? fieldKey(section, item, 'correct') : null"
+                    :aria-invalid="isInvalid(fieldKey(section, item, 'correct'))"
+                    @change="clearInvalid(fieldKey(section, item, 'correct'))"
                   >
                   <span class="mc-choice-letter">{{ letter }}.</span>
                   <input
@@ -852,12 +1024,16 @@ onMounted(reload)
                     type="text"
                     :placeholder="'Choice ' + letter.toUpperCase()"
                     title="Choice text"
+                    :data-validation-key="fieldKey(section, item, `choice-${letter}`)"
+                    :class="{ invalid: isInvalid(fieldKey(section, item, `choice-${letter}`)) }"
+                    :aria-invalid="isInvalid(fieldKey(section, item, `choice-${letter}`))"
+                    @input="clearInvalid(fieldKey(section, item, `choice-${letter}`))"
                   >
                 </label>
               </div>
               <div class="mc-meta">
                 <label>Points <input v-model.number="item.points" type="number" style="width:60px;" title="Points"></label>
-                <label>Threshold % <input v-model.number="item.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
+                <label>Threshold % <input v-model.number="item.threshold" type="number" min="0" max="100" style="width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(item)" @blur="clampThreshold(item)"></label>
               </div>
             </div>
             <div v-if="!section.items.length" class="muted-text mb-8">No multiple choice questions yet.</div>
@@ -874,17 +1050,20 @@ onMounted(reload)
                   <tr><th>#</th><th>Statement</th><th>Correct</th><th>Points</th><th>Threshold</th><th></th></tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(item, idx) in section.items" :key="item.uid">
-                    <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
-                    <td><input v-model="item.question_text" type="text" title="Statement text"></td>
+                  <tr v-for="(item, idx) in section.items" :key="item.uid" :class="{ 'qb-item-incomplete': itemHasInvalidField(section, item) }">
+                    <td style="text-align:center;font-weight:700;">
+                      {{ idx + 1 }}
+                      <span v-if="itemHasInvalidField(section, item)" class="qb-issue-marker" title="Complete the red required fields.">⚠</span>
+                    </td>
+                    <td><input v-model="item.question_text" type="text" title="Statement text" :data-validation-key="fieldKey(section, item, 'question')" :class="{ invalid: isInvalid(fieldKey(section, item, 'question')) }" :aria-invalid="isInvalid(fieldKey(section, item, 'question'))" @input="clearInvalid(fieldKey(section, item, 'question'))"></td>
                     <td>
-                      <select v-model="item.correct" title="Correct answer">
+                      <select v-model="item.correct" title="Correct answer" :data-validation-key="fieldKey(section, item, 'correct')" :class="{ invalid: isInvalid(fieldKey(section, item, 'correct')) }" :aria-invalid="isInvalid(fieldKey(section, item, 'correct'))" @change="clearInvalid(fieldKey(section, item, 'correct'))">
                         <option value="True">True</option>
                         <option value="False">False</option>
                       </select>
                     </td>
                     <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
-                    <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
+                    <td><input v-model.number="item.threshold" type="number" min="0" max="100" style="text-align:center;width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(item)" @blur="clampThreshold(item)"></td>
                     <td>
                       <button class="btn btn-danger btn-small" title="Remove this statement." aria-label="Remove this statement" @click="removeItemFromSection(section, item.uid)">✕</button>
                     </td>
@@ -906,13 +1085,16 @@ onMounted(reload)
                   <tr><th>#</th><th>Question</th><th>Correct Answer</th><th>Alternative Answers</th><th>Points</th><th>Threshold</th><th></th></tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(item, idx) in section.items" :key="item.uid">
-                    <td style="text-align:center;font-weight:700;">{{ idx + 1 }}</td>
-                    <td><input v-model="item.question_text" type="text" title="Question text"></td>
-                    <td><input v-model="item.correct" type="text" title="Correct answer"></td>
+                  <tr v-for="(item, idx) in section.items" :key="item.uid" :class="{ 'qb-item-incomplete': itemHasInvalidField(section, item) }">
+                    <td style="text-align:center;font-weight:700;">
+                      {{ idx + 1 }}
+                      <span v-if="itemHasInvalidField(section, item)" class="qb-issue-marker" title="Complete the red required fields.">⚠</span>
+                    </td>
+                    <td><input v-model="item.question_text" type="text" title="Question text" :data-validation-key="fieldKey(section, item, 'question')" :class="{ invalid: isInvalid(fieldKey(section, item, 'question')) }" :aria-invalid="isInvalid(fieldKey(section, item, 'question'))" @input="clearInvalid(fieldKey(section, item, 'question'))"></td>
+                    <td><input v-model="item.correct" type="text" title="Correct answer" :data-validation-key="fieldKey(section, item, 'correct')" :class="{ invalid: isInvalid(fieldKey(section, item, 'correct')) }" :aria-invalid="isInvalid(fieldKey(section, item, 'correct'))" @input="clearInvalid(fieldKey(section, item, 'correct'))"></td>
                     <td><input v-model="item.alternatives" type="text" title="Alternative answers"></td>
                     <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
-                    <td><input v-model.number="item.threshold" type="number" style="text-align:center;width:70px;" title="Fuzzy match threshold %"></td>
+                    <td><input v-model.number="item.threshold" type="number" min="0" max="100" style="text-align:center;width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(item)" @blur="clampThreshold(item)"></td>
                     <td>
                       <button class="btn btn-danger btn-small" title="Remove this question." aria-label="Remove this question" @click="removeItemFromSection(section, item.uid)">✕</button>
                     </td>
@@ -928,14 +1110,19 @@ onMounted(reload)
 
           <!-- Enumeration -->
           <template v-else-if="section.type === 'Enumeration'">
-            <div v-for="(group, idx) in section.items" :key="group.uid" class="enum-group">
+            <div v-for="(group, idx) in section.items" :key="group.uid" class="enum-group" :class="{ 'qb-item-incomplete': itemHasInvalidField(section, group) }">
               <div class="enum-group-header">
                 <span class="qb-index">{{ idx + 1 }}.</span>
+                <span v-if="itemHasInvalidField(section, group)" class="qb-issue-marker" title="Complete the red required fields.">⚠</span>
                 <input
                   v-model="group.question_text"
                   type="text"
                   placeholder="Enumeration prompt (e.g. Enumerate 4 examples of...)"
                   title="Enumeration prompt"
+                  :data-validation-key="fieldKey(section, group, 'question')"
+                  :class="{ invalid: isInvalid(fieldKey(section, group, 'question')) }"
+                  :aria-invalid="isInvalid(fieldKey(section, group, 'question'))"
+                  @input="clearInvalid(fieldKey(section, group, 'question'))"
                 >
                 <button
                   class="btn btn-danger btn-small"
@@ -947,9 +1134,9 @@ onMounted(reload)
                 </button>
               </div>
               <div v-for="blank in group.blanks" :key="blank.uid" class="enum-blank-row">
-                <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer">
+                <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer" :data-validation-key="fieldKey(section, group, `blank-${blank.uid}`)" :class="{ invalid: isInvalid(fieldKey(section, group, `blank-${blank.uid}`)) }" :aria-invalid="isInvalid(fieldKey(section, group, `blank-${blank.uid}`))" @input="clearInvalid(fieldKey(section, group, `blank-${blank.uid}`))">
                 <label>Points <input v-model.number="blank.points" type="number" style="width:60px;" title="Points"></label>
-                <label>Threshold % <input v-model.number="blank.threshold" type="number" style="width:70px;" title="Fuzzy match threshold %"></label>
+                <label>Threshold % <input v-model.number="blank.threshold" type="number" min="0" max="100" style="width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(blank)" @blur="clampThreshold(blank)"></label>
                 <button
                   class="btn btn-danger btn-small"
                   title="Remove this answer."
@@ -980,6 +1167,13 @@ onMounted(reload)
           >
             + Add Test Section
           </button>
+        </div>
+
+        <div v-if="validationAttempted && incompleteItems.length" class="inline-notice warning-notice qb-incomplete-banner" aria-live="polite">
+          <strong>{{ incompleteItems.length }} question{{ incompleteItems.length === 1 ? '' : 's' }} missing required fields:</strong>
+          <span v-for="(entry, i) in incompleteItems" :key="i" class="qb-incomplete-entry">
+            {{ entry.label }} (missing {{ entry.issues.join(', ') }}){{ i < incompleteItems.length - 1 ? ';' : '' }}
+          </span>
         </div>
 
         <div class="flex gap-8 mt-8 items-center">
