@@ -599,19 +599,21 @@ function closePreview() {
 
 /* ---------------------------------------------------------- Capture Live */
 
-// A phone/tablet's own camera app is full-screen, has real zoom/focus/flash
-// controls, and is what the user is already used to -- an in-page
-// getUserMedia() <video> preview is boxed into the card layout and came out
-// too small to frame a whole sheet of paper on a phone screen. Detected once
-// (not by feature-testing getUserMedia, which phones also support) since the
-// two capture UIs behave differently enough that mixing them within one
-// session based on some other signal would be confusing.
-const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
-// input[capture] needs no getUserMedia/secure-context permission at all --
-// it just hands the job to the OS camera app -- so mobile support doesn't
-// depend on window.isSecureContext the way the desktop webcam path does.
-const cameraSupported = isMobile
-  || (typeof navigator !== 'undefined' && !!navigator.mediaDevices && window.isSecureContext)
+// input[capture=environment] (opening the OS camera app directly instead of
+// this in-page preview) was tried first and reverted: on a real Android
+// phone it opened the Google Photos picker instead of the camera, which
+// Chromium's own issue tracker documents as a real, long-standing
+// inconsistency -- Android's system Photo Picker (default since Android 13)
+// can pre-empt the capture intent depending on OS/Chrome version, and
+// several OEM browsers never honored `capture` reliably even before that.
+// There is no attribute combination that fixes this across real devices, so
+// getUserMedia() is the primary path everywhere, and that input is kept
+// only as captureFallback()'s last resort for when getUserMedia itself
+// fails outright. What actually needed fixing for a small mobile preview
+// was the on-screen size -- see .camera-box's mobile breakpoint in
+// styles.css, which now makes this modal fill the screen there instead of
+// sitting in a small card.
+const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices && window.isSecureContext
 const cameraOpen = ref(false)
 const cameraError = ref('')
 const videoEl = ref(null)
@@ -629,10 +631,14 @@ async function openCamera() {
   cameraError.value = ''
   capturedPages.value = []
   cameraOpen.value = true
-  if (isMobile) return // no live preview to start -- capturePage() opens the camera app per page
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
+      // ideal, not exact/min: a phone's rear camera commonly supports far
+      // more than this, and requesting it as a floor asks for a properly
+      // sharp frame instead of whatever low-res default the browser picks;
+      // exact/min would instead throw OverconstrainedError on any camera
+      // that cannot hit it exactly.
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     })
     if (videoEl.value) videoEl.value.srcObject = mediaStream
@@ -665,17 +671,7 @@ function capturePage() {
   // still sneak an extra page in between the click and the button actually
   // disabling -- this is what a stray page count past "Pages per student"
   // was coming from.
-  if (captureComplete.value) return
-  if (isMobile) {
-    // Reset first: choosing the exact same photo twice in a row (e.g. Retake
-    // then pick the same shot from the camera roll fallback) would not
-    // otherwise fire another 'change' event, since the input's value would
-    // not have changed.
-    if (nativeCaptureInput.value) nativeCaptureInput.value.value = ''
-    nativeCaptureInput.value?.click()
-    return
-  }
-  if (!videoEl.value) return
+  if (!videoEl.value || captureComplete.value) return
   const canvas = document.createElement('canvas')
   canvas.width = videoEl.value.videoWidth
   canvas.height = videoEl.value.videoHeight
@@ -686,8 +682,17 @@ function capturePage() {
   }, 'image/jpeg', 0.92)
 }
 
-// input[capture]'s change event -- fires once the camera app hands back a
-// photo (or does nothing if the teacher backed out without taking one).
+// Fallback only: getUserMedia already failed (permission denied, no camera,
+// an in-app browser that blocks it outright, etc.) by the time this can even
+// be clicked -- see the v-if next to it in the template. input[capture] is
+// not used as the primary path since it does not reliably open the camera
+// (see the comment above), but as a last resort it at least lets a teacher
+// pick or shoot a photo some other way instead of being stuck entirely.
+function captureFallback() {
+  if (captureComplete.value) return
+  if (nativeCaptureInput.value) nativeCaptureInput.value.value = ''
+  nativeCaptureInput.value?.click()
+}
 function onNativeCapture(event) {
   const file = event.target.files?.[0]
   if (file) addCapturedPage(file)
@@ -874,10 +879,9 @@ async function proceed() {
             hidden
             @change="onFilePicked($event, 'Folder')"
           >
-          <!-- Mobile Capture Live: `capture` hands the whole job to the
-               device's own camera app instead of an in-page preview. -->
+          <!-- Capture Live fallback only, shown after getUserMedia already
+               failed -- see captureFallback()'s comment. -->
           <input
-            v-if="isMobile"
             ref="nativeCaptureInput"
             type="file"
             accept="image/*"
@@ -1015,13 +1019,34 @@ async function proceed() {
       <div class="toast-box camera-box" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
         <div id="camera-modal-title" class="toast-title">Capture Live</div>
 
-        <div v-if="cameraError" class="muted-text mb-8">{{ cameraError }}</div>
-        <template v-else>
-          <div v-if="!isMobile" class="camera-preview">
-            <video ref="videoEl" autoplay playsinline muted></video>
+        <template v-if="cameraError">
+          <div class="muted-text mb-8">{{ cameraError }}</div>
+          <div class="flex gap-8 flex-wrap items-center">
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="captureComplete"
+              @click="captureFallback"
+            >
+              {{ captureComplete ? 'All Pages Captured' : `Choose or Take Photo (Page ${currentPageNo})` }}
+            </button>
+            <img
+              v-if="lastCapturedPage"
+              :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
+              alt="Last captured page"
+              class="submission-thumb"
+              title="Last captured page -- click to preview full size"
+              role="button"
+              tabindex="0"
+              @click="openPreview(lastCapturedPage)"
+              @keydown.enter.prevent="openPreview(lastCapturedPage)"
+              @keydown.space.prevent="openPreview(lastCapturedPage)"
+            >
           </div>
-          <div v-else-if="!lastCapturedPage" class="camera-preview camera-preview-mobile">
-            <span class="muted-text">Tap "Capture Page {{ currentPageNo }}" below to open your camera.</span>
+        </template>
+        <template v-else>
+          <div class="camera-preview">
+            <video ref="videoEl" autoplay playsinline muted></video>
           </div>
           <div class="muted-text mt-8 mb-8">
             <template v-if="captureComplete">All {{ targetPageCount }} page(s) captured for this student.</template>
