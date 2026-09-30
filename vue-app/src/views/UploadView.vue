@@ -599,10 +599,23 @@ function closePreview() {
 
 /* ---------------------------------------------------------- Capture Live */
 
-const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices && window.isSecureContext
+// A phone/tablet's own camera app is full-screen, has real zoom/focus/flash
+// controls, and is what the user is already used to -- an in-page
+// getUserMedia() <video> preview is boxed into the card layout and came out
+// too small to frame a whole sheet of paper on a phone screen. Detected once
+// (not by feature-testing getUserMedia, which phones also support) since the
+// two capture UIs behave differently enough that mixing them within one
+// session based on some other signal would be confusing.
+const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent)
+// input[capture] needs no getUserMedia/secure-context permission at all --
+// it just hands the job to the OS camera app -- so mobile support doesn't
+// depend on window.isSecureContext the way the desktop webcam path does.
+const cameraSupported = isMobile
+  || (typeof navigator !== 'undefined' && !!navigator.mediaDevices && window.isSecureContext)
 const cameraOpen = ref(false)
 const cameraError = ref('')
 const videoEl = ref(null)
+const nativeCaptureInput = ref(null)
 let mediaStream = null
 /* Pages captured so far for the student currently being photographed --
    committed into a real group only once "Finish Student" is clicked. */
@@ -616,6 +629,7 @@ async function openCamera() {
   cameraError.value = ''
   capturedPages.value = []
   cameraOpen.value = true
+  if (isMobile) return // no live preview to start -- capturePage() opens the camera app per page
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment' },
@@ -639,24 +653,44 @@ function closeCamera() {
 }
 onUnmounted(stopStream)
 
+function addCapturedPage(file) {
+  const entry = normalizeEntry(file, 'Camera')
+  capturedPages.value = [...capturedPages.value, entry]
+  ensureThumb(entry)
+}
+
 function capturePage() {
   // Guards the data, not just the button: without this, a fast double-click
   // (or a click landing right as Vue re-renders the disabled state) could
   // still sneak an extra page in between the click and the button actually
   // disabling -- this is what a stray page count past "Pages per student"
   // was coming from.
-  if (!videoEl.value || captureComplete.value) return
+  if (captureComplete.value) return
+  if (isMobile) {
+    // Reset first: choosing the exact same photo twice in a row (e.g. Retake
+    // then pick the same shot from the camera roll fallback) would not
+    // otherwise fire another 'change' event, since the input's value would
+    // not have changed.
+    if (nativeCaptureInput.value) nativeCaptureInput.value.value = ''
+    nativeCaptureInput.value?.click()
+    return
+  }
+  if (!videoEl.value) return
   const canvas = document.createElement('canvas')
   canvas.width = videoEl.value.videoWidth
   canvas.height = videoEl.value.videoHeight
   canvas.getContext('2d').drawImage(videoEl.value, 0, 0)
   canvas.toBlob((blob) => {
     if (!blob) return
-    const file = new File([blob], `capture-${Date.now()}-p${currentPageNo.value}.jpg`, { type: 'image/jpeg' })
-    const entry = normalizeEntry(file, 'Camera')
-    capturedPages.value = [...capturedPages.value, entry]
-    ensureThumb(entry)
+    addCapturedPage(new File([blob], `capture-${Date.now()}-p${currentPageNo.value}.jpg`, { type: 'image/jpeg' }))
   }, 'image/jpeg', 0.92)
+}
+
+// input[capture]'s change event -- fires once the camera app hands back a
+// photo (or does nothing if the teacher backed out without taking one).
+function onNativeCapture(event) {
+  const file = event.target.files?.[0]
+  if (file) addCapturedPage(file)
 }
 
 function retakeLastPage() {
@@ -815,7 +849,7 @@ async function proceed() {
               type="button"
               class="btn btn-secondary"
               :disabled="!cameraSupported"
-              :title="cameraSupported ? 'Photograph pages directly, one student at a time.' : 'Live capture needs a secure connection (HTTPS or localhost).'"
+              :title="cameraSupported ? 'Photograph pages directly, one student at a time.' : 'Live capture needs a secure connection (HTTPS or localhost) on this device.'"
               @click.stop="openCamera"
             >
               Capture Live
@@ -839,6 +873,17 @@ async function proceed() {
             accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
             @change="onFilePicked($event, 'Folder')"
+          >
+          <!-- Mobile Capture Live: `capture` hands the whole job to the
+               device's own camera app instead of an in-page preview. -->
+          <input
+            v-if="isMobile"
+            ref="nativeCaptureInput"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+            @change="onNativeCapture"
           >
         </div>
 
@@ -972,8 +1017,11 @@ async function proceed() {
 
         <div v-if="cameraError" class="muted-text mb-8">{{ cameraError }}</div>
         <template v-else>
-          <div class="camera-preview">
+          <div v-if="!isMobile" class="camera-preview">
             <video ref="videoEl" autoplay playsinline muted></video>
+          </div>
+          <div v-else-if="!lastCapturedPage" class="camera-preview camera-preview-mobile">
+            <span class="muted-text">Tap "Capture Page {{ currentPageNo }}" below to open your camera.</span>
           </div>
           <div class="muted-text mt-8 mb-8">
             <template v-if="captureComplete">All {{ targetPageCount }} page(s) captured for this student.</template>
