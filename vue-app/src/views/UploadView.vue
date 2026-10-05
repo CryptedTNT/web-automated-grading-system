@@ -25,7 +25,8 @@
    before processing starts, regardless of which path produced it.
    ============================================================ */
 
-import { computed, markRaw, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, markRaw, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { cameraCapabilities, applyCameraControl } from '@/services/cameraControls.js'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
@@ -39,7 +40,9 @@ const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.tif', '
 const HEIF_EXTENSIONS = new Set(['.heic', '.heif'])
 
 const fileInput = ref(null)
+const photoInput = ref(null)
 const folderInput = ref(null)
+const sourceDialog = ref(null)
 const dragOver = ref(false)
 
 // The webkitdirectory/directory attributes in the template below don't
@@ -82,6 +85,7 @@ async function collectDirectoryFiles(dirHandle, pathPrefix) {
 }
 
 async function browseFolder() {
+  sourceDialog.value = null
   if (!supportsDirectoryPicker) {
     folderInput.value?.click()
     return
@@ -283,9 +287,15 @@ function chunkFlat(entries) {
   return result
 }
 
-function onFilePicked(event, source) {
-  addFiles(Array.from(event.target.files || []), source)
+async function onFilePicked(event, source) {
+  const files = Array.from(event.target.files || [])
   event.target.value = '' // let the same file be picked again
+  if (source === 'Folder' && files.length && !files.some((file) => file.webkitRelativePath?.includes('/'))) {
+    await showMessage('Folder Selection Not Supported', 'Your browser returned individual files, not a folder. These images will be grouped using Pages per Student instead. For student subfolders, use a browser that supports folder selection.')
+    await addFiles(files, 'Images')
+    return
+  }
+  await addFiles(files, source)
 }
 
 function droppedFile(entry) {
@@ -357,8 +367,16 @@ function onDragLeave(event) {
 /* Clicking the zone opens the picker, but not when a button inside
    it was the actual target. */
 function openFilePicker(event) {
-  if (event?.target?.closest?.('button')) return
-  fileInput.value?.click()
+  if (event?.target?.closest?.('button, input')) return
+  sourceDialog.value = 'images'
+}
+
+function chooseImageSource(source) {
+  sourceDialog.value = null
+  // Trigger synchronously while this click still has user activation.
+  const input = source === 'photos' ? photoInput.value : fileInput.value
+  if (input) input.value = ''
+  input?.click()
 }
 
 function clearQueue() {
@@ -599,26 +617,54 @@ function closePreview() {
 
 /* ---------------------------------------------------------- Capture Live */
 
-// input[capture=environment] (opening the OS camera app directly instead of
-// this in-page preview) was tried first and reverted: on a real Android
-// phone it opened the Google Photos picker instead of the camera, which
-// Chromium's own issue tracker documents as a real, long-standing
-// inconsistency -- Android's system Photo Picker (default since Android 13)
-// can pre-empt the capture intent depending on OS/Chrome version, and
-// several OEM browsers never honored `capture` reliably even before that.
-// There is no attribute combination that fixes this across real devices, so
-// getUserMedia() is the primary path everywhere, and that input is kept
-// only as captureFallback()'s last resort for when getUserMedia itself
-// fails outright. What actually needed fixing for a small mobile preview
-// was the on-screen size -- see .camera-box's mobile breakpoint in
-// styles.css, which now makes this modal fill the screen there instead of
-// sitting in a small card.
-const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices && window.isSecureContext
+// In-browser capture on mobile and desktop, with native picker fallback.
+const cameraSupported = typeof navigator !== 'undefined'
 const cameraOpen = ref(false)
 const cameraError = ref('')
 const videoEl = ref(null)
 const nativeCaptureInput = ref(null)
 let mediaStream = null
+let cameraGeneration = 0
+const cameraReady = ref(false)
+const controls = ref(cameraCapabilities(null))
+const torchOn = ref(false)
+const controlsBusy = ref(false)
+const controlMessage = ref('')
+const focusDistance = ref(0)
+
+function activeTrack() { return mediaStream?.getVideoTracks()[0] }
+
+async function changeCameraControl(values) {
+  if (controlsBusy.value || !cameraReady.value) return false
+  controlsBusy.value = true
+  controlMessage.value = ''
+  const generation = cameraGeneration
+  try {
+    await applyCameraControl(activeTrack(), values)
+    return generation === cameraGeneration && cameraOpen.value
+  } catch (error) {
+    if (generation === cameraGeneration) controlMessage.value = error.message || 'This control is unavailable on your device.'
+    return false
+  } finally {
+    if (generation === cameraGeneration) controlsBusy.value = false
+  }
+}
+
+async function toggleTorch() {
+  const enabled = !torchOn.value
+  if (await changeCameraControl({ torch: enabled })) torchOn.value = enabled
+}
+
+async function refocus() {
+  if (!controls.value.refocusMode) return
+  if (await changeCameraControl({ focusMode: controls.value.refocusMode })) {
+    controlMessage.value = 'Focus requested. Hold the phone steady and check the preview before capturing.'
+  }
+}
+
+async function setManualFocus() {
+  await changeCameraControl({ focusMode: 'manual', focusDistance: Number(focusDistance.value) })
+}
 /* Pages captured so far for the student currently being photographed --
    committed into a real group only once "Finish Student" is clicked. */
 const capturedPages = ref([])
@@ -628,11 +674,17 @@ const captureComplete = computed(() => capturedPages.value.length >= targetPageC
 const lastCapturedPage = computed(() => capturedPages.value[capturedPages.value.length - 1] || null)
 
 async function openCamera() {
+  stopStream()
+  const generation = cameraGeneration
   cameraError.value = ''
   capturedPages.value = []
   cameraOpen.value = true
+  if (!navigator.mediaDevices?.getUserMedia || !window.isSecureContext) {
+    cameraError.value = 'Live camera requires HTTPS (or localhost on this device). Use the secure deployed website, or choose a photo below.'
+    return
+  }
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       // ideal, not exact/min: a phone's rear camera commonly supports far
       // more than this, and requesting it as a floor asks for a properly
       // sharp frame instead of whatever low-res default the browser picks;
@@ -641,15 +693,40 @@ async function openCamera() {
       video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     })
-    if (videoEl.value) videoEl.value.srcObject = mediaStream
+    // A permission prompt can finish after the modal has closed.
+    if (generation !== cameraGeneration || !cameraOpen.value) {
+      stream.getTracks().forEach((track) => track.stop())
+      return
+    }
+    mediaStream = stream
+    await nextTick()
+    if (generation !== cameraGeneration || !cameraOpen.value) return
+    if (videoEl.value) {
+      videoEl.value.srcObject = stream
+      await videoEl.value.play()
+    }
+    if (generation !== cameraGeneration || !cameraOpen.value) return
+    controls.value = cameraCapabilities(activeTrack())
+    const distance = activeTrack()?.getSettings?.().focusDistance
+    focusDistance.value = Math.min(controls.value.focusMax, Math.max(controls.value.focusMin, distance ?? controls.value.focusMin))
+    cameraReady.value = true
+    if (controls.value.autoFocus) await changeCameraControl({ focusMode: 'continuous' })
   } catch (error) {
+    if (generation !== cameraGeneration) return
+    stopStream()
     cameraError.value = error?.message || 'Could not access the camera.'
   }
 }
 
 function stopStream() {
+  cameraGeneration += 1
   mediaStream?.getTracks().forEach((track) => track.stop())
   mediaStream = null
+  cameraReady.value = false
+  torchOn.value = false
+  controlsBusy.value = false
+  controls.value = cameraCapabilities(null)
+  controlMessage.value = ''
 }
 
 function closeCamera() {
@@ -660,6 +737,7 @@ function closeCamera() {
 onUnmounted(stopStream)
 
 function addCapturedPage(file) {
+  if (!cameraOpen.value || captureComplete.value) return
   const entry = normalizeEntry(file, 'Camera')
   capturedPages.value = [...capturedPages.value, entry]
   ensureThumb(entry)
@@ -671,23 +749,23 @@ function capturePage() {
   // still sneak an extra page in between the click and the button actually
   // disabling -- this is what a stray page count past "Pages per student"
   // was coming from.
-  if (!videoEl.value || captureComplete.value) return
+  if (!cameraReady.value || !videoEl.value || captureComplete.value || controlsBusy.value) return
+  if (!videoEl.value.videoWidth || !videoEl.value.videoHeight) {
+    controlMessage.value = 'Wait for the camera preview to appear before capturing.'
+    return
+  }
+  const generation = cameraGeneration
   const canvas = document.createElement('canvas')
   canvas.width = videoEl.value.videoWidth
   canvas.height = videoEl.value.videoHeight
   canvas.getContext('2d').drawImage(videoEl.value, 0, 0)
   canvas.toBlob((blob) => {
-    if (!blob) return
+    if (!blob || generation !== cameraGeneration) return
     addCapturedPage(new File([blob], `capture-${Date.now()}-p${currentPageNo.value}.jpg`, { type: 'image/jpeg' }))
   }, 'image/jpeg', 0.92)
 }
 
-// Fallback only: getUserMedia already failed (permission denied, no camera,
-// an in-app browser that blocks it outright, etc.) by the time this can even
-// be clicked -- see the v-if next to it in the template. input[capture] is
-// not used as the primary path since it does not reliably open the camera
-// (see the comment above), but as a last resort it at least lets a teacher
-// pick or shoot a photo some other way instead of being stuck entirely.
+// Fallback when webcam access fails or HTTPS is unavailable.
 function captureFallback() {
   if (captureComplete.value) return
   if (nativeCaptureInput.value) nativeCaptureInput.value.value = ''
@@ -730,6 +808,7 @@ function doneCapturing() {
 // priority since it can be opened on top of the camera modal.
 function onModalKeydown(event) {
   if (event.key !== 'Escape') return
+  if (sourceDialog.value) { sourceDialog.value = null; return }
   if (previewEntry.value) closePreview()
   else if (cameraOpen.value) doneCapturing()
 }
@@ -833,8 +912,8 @@ async function proceed() {
           tabindex="0"
           aria-label="Choose or drop answer sheet images or folders"
           @click="openFilePicker"
-          @keydown.enter.prevent="fileInput?.click()"
-          @keydown.space.prevent="fileInput?.click()"
+          @keydown.enter.self.prevent="sourceDialog = 'images'"
+          @keydown.space.self.prevent="sourceDialog = 'images'"
           @dragover.prevent="dragOver = true"
           @dragleave="onDragLeave"
           @drop.prevent="onDrop"
@@ -844,10 +923,10 @@ async function proceed() {
           <div class="muted-text">Drop a class folder to keep student subfolders together.</div>
           <div class="muted-text">JPG, JPEG, PNG, BMP, TIF, TIFF, HEIC, and HEIF</div>
           <div class="flex gap-8 flex-wrap justify-center">
-            <button type="button" class="btn btn-primary" @click.stop="fileInput?.click()">
+            <button type="button" class="btn btn-primary" @click.stop="sourceDialog = 'images'">
               Browse Images
             </button>
-            <button type="button" class="btn btn-secondary" @click.stop="browseFolder">
+            <button type="button" class="btn btn-secondary" @click.stop="sourceDialog = 'folder'">
               Browse Folder
             </button>
             <button
@@ -862,11 +941,20 @@ async function proceed() {
           </div>
 
           <input
+            ref="photoInput"
+            type="file"
+            multiple
+            accept="image/*"
+            hidden
+            @click.stop
+            @change="onFilePicked($event, 'Images')"
+          >
+          <input
             ref="fileInput"
             type="file"
             multiple
-            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
+            @click.stop
             @change="onFilePicked($event, 'Images')"
           >
           <input
@@ -875,18 +963,18 @@ async function proceed() {
             multiple
             webkitdirectory
             directory
-            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
+            @click.stop
             @change="onFilePicked($event, 'Folder')"
           >
-          <!-- Capture Live fallback only, shown after getUserMedia already
-               failed -- see captureFallback()'s comment. -->
+          <!-- File-picker fallback when the live camera is unavailable. -->
           <input
             ref="nativeCaptureInput"
             type="file"
             accept="image/*"
             capture="environment"
             hidden
+            @click.stop
             @change="onNativeCapture"
           >
         </div>
@@ -1014,6 +1102,20 @@ async function proceed() {
       </section>
     </div>
 
+    <div v-if="sourceDialog" class="toast-overlay" @click.self="sourceDialog = null">
+      <div class="toast-box" role="dialog" aria-modal="true" aria-labelledby="upload-source-title">
+        <div id="upload-source-title" class="toast-title">{{ sourceDialog === 'folder' ? 'Choose a Folder or Select Images' : 'Choose Image Source' }}</div>
+        <p class="muted-text">Photo Library uses your phone's Gallery or Google Photos, depending on its browser. Files lets you browse storage and available providers.</p>
+        <p v-if="sourceDialog === 'folder'" class="muted-text">Only Select Folder preserves student subfolders. Selecting photos or individual files groups them using Pages per Student instead.</p>
+        <div class="flex gap-8 flex-wrap">
+          <button v-if="sourceDialog === 'folder'" type="button" class="btn btn-primary" @click="browseFolder">Select Folder</button>
+          <button type="button" class="btn btn-secondary" @click="chooseImageSource('photos')">Photo Library (Gallery / Google Photos)</button>
+          <button type="button" class="btn btn-secondary" @click="chooseImageSource('files')">Browse Files</button>
+        </div>
+        <div class="toast-actions"><button type="button" class="btn btn-secondary" @click="sourceDialog = null">Cancel</button></div>
+      </div>
+    </div>
+
     <!-- Capture Live modal -->
     <div v-if="cameraOpen" class="toast-overlay" @click.self="doneCapturing">
       <div class="toast-box camera-box" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
@@ -1021,6 +1123,7 @@ async function proceed() {
 
         <template v-if="cameraError">
           <div class="muted-text mb-8">{{ cameraError }}</div>
+          <div class="muted-text mb-8">{{ capturedPages.length }} / {{ targetPageCount }} pages captured for this student.</div>
           <div class="flex gap-8 flex-wrap items-center">
             <button
               type="button"
@@ -1030,6 +1133,7 @@ async function proceed() {
             >
               {{ captureComplete ? 'All Pages Captured' : `Choose or Take Photo (Page ${currentPageNo})` }}
             </button>
+            <button type="button" class="btn btn-secondary" :disabled="!capturedPages.length" @click="retakeLastPage">Remove Last Photo to Retake</button>
             <img
               v-if="lastCapturedPage"
               :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
@@ -1048,6 +1152,19 @@ async function proceed() {
           <div class="camera-preview">
             <video ref="videoEl" autoplay playsinline muted></video>
           </div>
+          <div class="flex gap-8 flex-wrap items-center mt-8">
+            <button type="button" class="btn btn-secondary" :disabled="!cameraReady || !controls.torch || controlsBusy" :aria-pressed="torchOn" @click="toggleTorch">
+              {{ controls.torch ? (torchOn ? 'Flashlight: On' : 'Flashlight: Off') : 'Flashlight Unavailable' }}
+            </button>
+            <button type="button" class="btn btn-secondary" :disabled="!cameraReady || !controls.refocusMode || controlsBusy" @click="refocus">
+              {{ controls.refocusMode ? 'Refocus Camera' : 'Autofocus Control Unavailable' }}
+            </button>
+          </div>
+          <div v-if="controls.manualFocus" class="form-group mt-8">
+            <label for="camera-focus-distance" class="form-label">Manual Focus — adjust until the text looks sharp</label>
+            <input id="camera-focus-distance" v-model.number="focusDistance" type="range" :min="controls.focusMin" :max="controls.focusMax" :step="controls.focusStep" :disabled="controlsBusy" @change="setManualFocus">
+          </div>
+          <div class="muted-text mt-8" role="status">{{ controlMessage || (cameraReady ? 'Flashlight stays on while capturing. Focus controls depend on your camera and browser.' : 'Opening camera…') }}</div>
           <div class="muted-text mt-8 mb-8">
             <template v-if="captureComplete">All {{ targetPageCount }} page(s) captured for this student.</template>
             <template v-else>Page {{ currentPageNo }} of {{ targetPageCount }} for this student.</template>
@@ -1058,7 +1175,7 @@ async function proceed() {
             <button
               type="button"
               class="btn btn-primary"
-              :disabled="captureComplete"
+              :disabled="captureComplete || !cameraReady || controlsBusy"
               :title="captureComplete ? 'All pages for this student are already captured -- use Finish Student & Next.' : ''"
               @click="capturePage"
             >
