@@ -6,6 +6,8 @@
    ============================================================ */
 
 import { API } from '@/services/api.js'
+import { canonicalSection } from './sections.js'
+export { canonicalSection } from './sections.js'
 
 /* One row per graded sheet, each carrying its own session. This is the
    full "every result in every session" fan-out -- callers group/filter it
@@ -25,40 +27,6 @@ export async function loadAllGradedRecords() {
 
 function toNumber(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0
-}
-
-/* A small alias table handles program names that are routinely written with
-   or without internal spaces. Add only confirmed school-program aliases
-   here; unknown program names retain their teacher-entered word spacing. */
-const PROGRAM_ALIASES = {
-  BSINFOTECH: 'BS INFOTECH',
-}
-
-function canonicalProgram(value) {
-  const program = String(value || '').replace(/\s+/g, ' ').trim()
-  const compact = program.replace(/[^A-Z0-9]/g, '')
-  return PROGRAM_ALIASES[compact] || program
-}
-
-/* Standardize common spacing variants without guessing a student's program.
-   For example, BSCS 1A, BSCS 1-A, and BSCS 1 - A all display/filter as
-   BSCS 1-A.  This is intentionally shared by Students and Results so the
-   same class never appears as two different filters in different screens. */
-export function canonicalSection(value) {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
-
-  const text = raw
-    .toUpperCase()
-    .replace(/[\u2013\u2014_]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim()
-  const match = text.match(/^(.+?)\s*(\d+)\s*[- ]?\s*([A-Z])$/)
-  if (match) {
-    const program = canonicalProgram(match[1])
-    return `${program} ${match[2]}-${match[3]}`
-  }
-  return text.replace(/\s*-\s*/g, '-')
 }
 
 /* Groups records by recognized name AND normalized section. There is no
