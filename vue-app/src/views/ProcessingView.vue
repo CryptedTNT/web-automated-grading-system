@@ -59,7 +59,7 @@ const countLabel = computed(() => `${job.completed} / ${job.total || groups.valu
 
 const currentLabel = computed(() => {
   if (job.isRunning && job.cancelRequested) return 'Cancelling...'
-  if (job.isRunning && job.currentFile) return `Grading ${job.currentFile}`
+  if (job.isRunning && job.currentFile) return `Grading ${job.currentFile}${job.progressStage ? ` — ${job.progressStage}` : ''}`
   if (job.status === 'completed') return `${sessionLabel(job.sessionId)} is ready for review.`
   if (job.status === 'cancelled') return `Cancelled. It did not use a session number -- the next run is still Session #${nextSessionNumber()}.`
   if (job.status === 'error') return job.error || 'Grading failed.'
@@ -120,9 +120,11 @@ function openResults() {
           aria-valuemin="0"
           aria-valuemax="100"
           :aria-valuenow="job.progress"
+          aria-label="Overall grading progress"
         >
           <div class="progress-fill" :style="{ width: `${job.progress}%` }"></div>
         </div>
+
 
         <div ref="logBox" class="log-box processing-log" aria-live="polite">
           <div v-if="!job.logs.length" class="log-empty">{{ emptyLogMessage }}</div>
@@ -172,3 +174,10 @@ function openResults() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.progress-fill { transition: width 0.6s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill { transition: none; }
+}
+</style>
