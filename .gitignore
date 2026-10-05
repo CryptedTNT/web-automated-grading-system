@@ -20,3 +20,8 @@ Thumbs.db
 # Temporary files
 temp/
 tmp/
+.tmp/
+
+# Generated output (user manual docx/pdf, screenshots, one-off build
+# scripts for producing them) -- not part of the application itself.
+output/
