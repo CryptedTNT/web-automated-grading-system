@@ -24,6 +24,7 @@ import { showMessage } from '@/services/dialog.js'
 import { sessionTag, sessionLabel, refreshSessionNumbers } from '@/services/sessionNumbers.js'
 import { formatDateTime } from '@/services/datetime.js'
 import { canonicalSection } from '@/services/studentDirectory.js'
+import { validManualScore } from '@/services/manualScoring.js'
 
 const router = useRouter()
 const store = useAppStore()
@@ -82,6 +83,8 @@ const loadingItems = ref(false)
 const notice = ref('')
 const action = ref('override')
 const manualAnswer = ref('')
+const manualScore = ref('')
+const savingReview = ref(false)
 const invalid = ref(false)
 const manualInput = ref(null)
 const cropMissing = ref(false)
@@ -100,6 +103,7 @@ const autoStatus = computed(() =>
 function resetItemForm() {
   action.value = 'override'
   manualAnswer.value = currentItem.value?.correct_answer || ''
+  manualScore.value = currentItem.value?.earned ?? 0
   invalid.value = false
   cropMissing.value = false
 }
@@ -165,27 +169,32 @@ function statusClass(status) {
   // own values, see database/APP_MAPPING.md) -- NOT the 'OK'/'Wrong'
   // sheet-level labels ResultsView.vue's statusClass() checks for.
   if (status === 'correct') return 'badge-success'
+  if (status === 'partial') return 'badge-blue'
   if (status === 'flagged') return 'badge-warning'
   if (status === 'incorrect') return 'badge-danger'
   return 'badge-gray'
 }
 
 async function saveOverride() {
+  if (savingReview.value) return
   const item = currentItem.value
   if (!item) return
 
   notice.value = ''
-  // Only override_action and (for the override case) student_answer are
-  // actually read by API.updateResultItem -- the backend itself derives
-  // score/status/match_score/remarks from the action, since it already
-  // has the item's points and the result's pre-review state to compute
-  // those from correctly (see results.py's review_result()).
+  // The backend validates awarded points against the question maximum
+  // and preserves the original automatic result for every review action.
   let updates
 
   if (action.value === 'accept') {
     updates = { override_action: 'accepted_correct' }
   } else if (action.value === 'wrong') {
     updates = { override_action: 'marked_incorrect' }
+  } else if (action.value === 'score') {
+    if (!validManualScore(manualScore.value, item.points)) {
+      await showMessage('Invalid Points', `Enter points from 0 to ${item.points}, with at most two decimal places.`)
+      return
+    }
+    updates = { override_action: 'manual_score_override', awarded_score: Number(manualScore.value) }
   } else {
     const answer = manualAnswer.value.trim()
     invalid.value = false
@@ -198,14 +207,19 @@ async function saveOverride() {
     updates = { student_answer: answer, override_action: 'manual_answer_override' }
   }
 
-  await API.updateResultItem(item.id, updates)
-  // No separate recalculate call -- the backend view derives totals
-  // from item scores automatically, nothing to trigger.
-  store.selectedStudentResultId = activeResultId.value
-
-  await loadItems()
-  await loadResults() // keeps the student list's flagged counts accurate
-  if (currentItem.value) notice.value = 'Review saved. The next flagged item for this student is ready.'
+  savingReview.value = true
+  try {
+    await API.updateResultItem(item.id, updates)
+    // Database views derive totals directly from the final item scores.
+    store.selectedStudentResultId = activeResultId.value
+    await loadItems()
+    await loadResults()
+    if (currentItem.value) notice.value = 'Review saved. The next flagged item for this student is ready.'
+  } catch (error) {
+    await showMessage('Could Not Save Review', error.message || 'Please try again.')
+  } finally {
+    savingReview.value = false
+  }
 }
 
 function openFullResult() {
@@ -350,6 +364,7 @@ function openFullResult() {
             <label><input v-model="action" type="radio" value="accept"> Accept as correct</label>
             <label><input v-model="action" type="radio" value="wrong"> Mark as incorrect</label>
             <label><input v-model="action" type="radio" value="override"> Override extracted answer</label>
+            <label><input v-model="action" type="radio" value="score"> Award Manual Points / Partial Credit</label>
           </div>
 
           <div class="form-group mt-14">
@@ -364,8 +379,13 @@ function openFullResult() {
             >
           </div>
 
+          <div v-if="action === 'score'" class="form-group mt-14">
+            <label for="review-manual-score" class="form-label">Points Awarded (out of {{ currentItem.points }})</label>
+            <input id="review-manual-score" v-model="manualScore" type="number" min="0" :max="currentItem.points" step="0.01">
+            <div class="muted-text">Example: award 2 out of 3 points. The extracted answer is kept unchanged.</div>
+          </div>
           <div class="workflow-actions vertical-actions">
-            <button class="btn btn-primary w-full" @click="saveOverride">Save and Continue</button>
+            <button class="btn btn-primary w-full" :disabled="savingReview" @click="saveOverride">{{ savingReview ? 'Saving…' : 'Save and Continue' }}</button>
             <button class="btn btn-secondary w-full" @click="backToList">Back to Student List</button>
           </div>
         </aside>

@@ -9,6 +9,7 @@ the verification steps in the plan."""
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -139,7 +140,7 @@ class AnswerKeyItemIn(BaseModel):
     choices: dict | None = None
     correct_answer: str
     alternatives: str = ""
-    points: float = Field(default=1.0, gt=0)
+    points: int = Field(default=1, ge=1, le=10)
     fuzzy_threshold: float = Field(default=85.0, ge=0, le=100)
 
 
@@ -159,7 +160,8 @@ class UpdateSessionStatusRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    action: str = Field(pattern="^(accepted_correct|marked_incorrect|manual_answer_override)$")
+    action: str = Field(pattern="^(accepted_correct|marked_incorrect|manual_answer_override|manual_score_override)$")
+    awarded_score: Decimal | None = Field(default=None, ge=0, max_digits=6, decimal_places=2, allow_inf_nan=False)
     corrected_answer: str | None = None
     review_seconds: int | None = None
 
