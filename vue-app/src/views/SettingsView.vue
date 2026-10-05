@@ -14,6 +14,7 @@
    ============================================================ */
 
 import { computed, ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 // Theme is a device display preference, not account data, and
 // loadSavedTheme() in main.js runs before login exists -- so it (and
@@ -30,6 +31,7 @@ import PasswordRules from '@/components/PasswordRules.vue'
 import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const store = useAppStore()
+const router = useRouter()
 
 const TABS = [
   { id: 'set-account', label: 'Account' },
@@ -80,7 +82,8 @@ async function saveEmail() {
     store.currentUser = await API.updateEmail(email)
     codeSent.value = false
     verifyCodeInput.value = ''
-    await showMessage('Email Saved', 'Email address saved. Verify it below to use it for password resets.')
+    await showMessage('Email Saved', 'Verify your new email before continuing to use the system.')
+    await router.push({ name: 'verify_email' })
   } catch (error) {
     await showMessage('Save Failed', error.message || 'Email could not be saved.')
   }

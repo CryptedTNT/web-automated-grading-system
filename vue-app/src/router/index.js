@@ -65,12 +65,11 @@ router.beforeEach(async (to) => {
   const store = useAppStore()
 
   if (to.meta.public) return true
-  if (store.isSignedIn) return true
-
-  // Try the saved session cookie before bouncing to sign-in.
-  if (await store.restoreRememberedUser()) return true
-
-  return { name: 'login' }
+  if (!store.isSignedIn && !(await store.restoreRememberedUser())) return { name: 'login' }
+  if (!store.currentUser.email_verified) {
+    return to.name === 'verify_email' ? true : { name: 'verify_email' }
+  }
+  return to.name === 'verify_email' ? { name: 'dashboard' } : true
 })
 
 export default router

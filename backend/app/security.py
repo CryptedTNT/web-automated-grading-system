@@ -58,7 +58,8 @@ def verify_and_maybe_migrate(faculty: Faculty, password: str, db: Session) -> bo
     return check_password_hash(faculty.password_hash, password)
 
 
-def get_current_faculty(request: Request, db: Session = Depends(get_db)) -> Faculty:
+def get_session_faculty(request: Request, db: Session = Depends(get_db)) -> Faculty:
+    """Restricted identity lookup for email verification, not application access."""
     faculty_id = request.session.get("faculty_id")
     if not faculty_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not signed in.")
@@ -66,4 +67,15 @@ def get_current_faculty(request: Request, db: Session = Depends(get_db)) -> Facu
     if not faculty:
         request.session.clear()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not signed in.")
+    return faculty
+
+
+def get_current_faculty(request: Request, db: Session = Depends(get_db)) -> Faculty:
+    faculty = get_session_faculty(request, db)
+    if not faculty.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Verify your email before accessing the system.",
+            headers={"X-Email-Verification-Required": "true"},
+        )
     return faculty

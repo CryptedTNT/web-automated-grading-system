@@ -10,7 +10,7 @@ security-answer hashes. Every response below names its columns.
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -30,6 +30,7 @@ from app.rate_limit import check_rate_limit, reset_rate_limit
 from app.security import (
     generate_numeric_code,
     get_current_faculty,
+    get_session_faculty,
     hash_password,
     verify_and_maybe_migrate,
 )
@@ -187,9 +188,9 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     db.commit()
     db.refresh(faculty)
 
-    # Auto-sign-in so the Verify Email step right after signup can reuse
-    # the same authenticated /account/email/* endpoints Settings uses
-    # later, instead of a separate public-by-username code path.
+    # Restricted session: only identity and verification endpoints are
+    # accessible until the email has been verified.
+    request.session.clear()
     request.session["faculty_id"] = faculty.faculty_id
     return _public_shape(faculty)
 
@@ -212,10 +213,12 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     reset_rate_limit(rate_key)
-    faculty.last_login_at = datetime.datetime.utcnow()
+    if faculty.email_verified:
+        faculty.last_login_at = datetime.datetime.utcnow()
     db.add(faculty)
     db.commit()
 
+    request.session.clear()
     request.session["faculty_id"] = faculty.faculty_id
     return _public_shape(faculty)
 
@@ -227,7 +230,7 @@ def logout(request: Request):
 
 
 @router.get("/auth/me")
-def me(faculty: Faculty = Depends(get_current_faculty)):
+def me(faculty: Faculty = Depends(get_session_faculty)):
     return _public_shape(faculty)
 
 
@@ -293,6 +296,12 @@ def update_email(
             raise HTTPException(status_code=409, detail="That email is already registered to another account.")
         faculty.email = body.email
         faculty.email_verified = 0
+        # Codes sent to the previous inbox must not verify the new address
+        # or reset its password.
+        db.execute(update(EmailVerificationCode).where(
+            EmailVerificationCode.faculty_id == faculty.faculty_id,
+            EmailVerificationCode.used_at.is_(None),
+        ).values(used_at=datetime.datetime.utcnow()))
         db.add(faculty)
         db.commit()
     return _public_shape(faculty)
@@ -300,7 +309,7 @@ def update_email(
 
 @router.post("/account/email/send-code")
 def send_email_verification_code(
-    faculty: Faculty = Depends(get_current_faculty),
+    faculty: Faculty = Depends(get_session_faculty),
     db: Session = Depends(get_db),
 ):
     if not faculty.email:
@@ -319,7 +328,7 @@ def send_email_verification_code(
 @router.post("/account/email/verify")
 def verify_email_code(
     body: VerifyEmailCodeRequest,
-    faculty: Faculty = Depends(get_current_faculty),
+    faculty: Faculty = Depends(get_session_faculty),
     db: Session = Depends(get_db),
 ):
     rate_key = f"verify_email_code:{faculty.faculty_id}"
@@ -328,6 +337,7 @@ def verify_email_code(
         return {"ok": False}
     reset_rate_limit(rate_key)
     faculty.email_verified = 1
+    faculty.last_login_at = datetime.datetime.utcnow()
     db.add(faculty)
     db.commit()
     return {"ok": True}
@@ -375,7 +385,7 @@ def forgot_send_code(body: ForgotSendCodeRequest, db: Session = Depends(get_db))
 @router.post("/auth/forgot/reset")
 def forgot_reset(body: ForgotResetRequest, db: Session = Depends(get_db)):
     faculty = db.scalar(select(Faculty).where(Faculty.username == body.username))
-    if not faculty:
+    if not faculty or not faculty.email_verified:
         return {"ok": False}
 
     # Keyed on faculty_id, not IP, same reasoning as login: this is a

@@ -9,6 +9,7 @@
 import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
+import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import HeroPanel from '@/components/HeroPanel.vue'
 import PasswordField from '@/components/PasswordField.vue'
@@ -16,6 +17,7 @@ import PasswordRules from '@/components/PasswordRules.vue'
 import LegalDocumentLink from '@/components/LegalDocumentLink.vue'
 
 const router = useRouter()
+const store = useAppStore()
 
 const PW_HINT = 'At least 8 characters, with a letter, a number, and a special character.'
 
@@ -98,13 +100,9 @@ async function submit() {
     return
   }
 
-  // Send the teacher to log in with their new credentials rather than
-  // straight into the dashboard -- signing them in here too was one
-  // more thing to undo if createUser succeeded but something after it
-  // failed, and it skipped the moment of confirming the password works.
-  // AuthLogin.vue already has a 'created' status message and an autofilled
-  // username for exactly this handoff.
-  router.push({ name: 'login', query: { status: 'created', u: user.username || form.username } })
+  // Only the verification flow is accessible with this restricted session.
+  await store.signIn(user)
+  router.push({ name: 'verify_email' })
 }
 </script>
 

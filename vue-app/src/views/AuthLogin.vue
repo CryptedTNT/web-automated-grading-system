@@ -83,7 +83,7 @@ async function submit() {
   // lifetime); unchecking it does not shorten the session early.
 
   await store.signIn(user)
-  router.push({ name: 'dashboard' })
+  router.push({ name: user.email_verified ? 'dashboard' : 'verify_email' })
 }
 
 function clearInvalid(field) {

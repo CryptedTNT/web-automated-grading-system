@@ -60,7 +60,15 @@ export const useAppStore = defineStore('app', {
 
     async signIn(user) {
       this.currentUser = user
-      await this.clearRuntimeSelection()
+      if (user.email_verified) await this.clearRuntimeSelection()
+      else {
+        this.uploadFiles = []
+        this.consentConfirmed = false
+        this.currentSessionId = null
+        this.selectedAnswerKeyId = null
+        this.selectedStudentResultId = null
+        this.selectedFlaggedItemId = null
+      }
     },
 
     async signOut() {
