@@ -21,6 +21,7 @@ import {
   convertInchesToTwip,
 } from 'docx'
 import { API } from '@/services/api.js'
+import { boundedQuestionPoints } from '@/services/questionnairePoints.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
 import {
   escapeHtml,
@@ -318,6 +319,11 @@ function removeItemFromSection(section, uid) {
 }
 
 function addEnumBlank(group) { group.blanks.push(makeEnumBlank()) }
+function limitPoints(item) {
+  if (item.points === '' || item.points === null || item.points === undefined) return
+  item.points = boundedQuestionPoints(item.points)
+}
+function clampPoints(item) { item.points = boundedQuestionPoints(item.points) }
 function removeEnumBlank(group, uid) {
   if (group.blanks.length <= 1) return
   group.blanks = group.blanks.filter((b) => b.uid !== uid)
@@ -497,7 +503,7 @@ function collectItems() {
           choices,
           correct_answer: [...row.correct].sort().join(','),
           alternatives: '',
-          points: parseFloat(row.points) || 1,
+          points: boundedQuestionPoints(row.points),
           fuzzy_threshold: clampedInt(row.threshold),
         })
       })
@@ -513,7 +519,7 @@ function collectItems() {
           choices: null,
           correct_answer: row.correct,
           alternatives: '',
-          points: parseFloat(row.points) || 1,
+          points: boundedQuestionPoints(row.points),
           fuzzy_threshold: clampedInt(row.threshold),
         })
       })
@@ -530,7 +536,7 @@ function collectItems() {
           choices: null,
           correct_answer: correct,
           alternatives: String(row.alternatives).trim(),
-          points: parseFloat(row.points) || 1,
+          points: boundedQuestionPoints(row.points),
           fuzzy_threshold: clampedInt(row.threshold),
         })
       })
@@ -550,7 +556,7 @@ function collectItems() {
             choices: null,
             correct_answer: String(b.correct).trim(),
             alternatives: '',
-            points: parseFloat(b.points) || 1,
+            points: boundedQuestionPoints(b.points),
             fuzzy_threshold: clampedInt(b.threshold),
           })
         })
@@ -1032,7 +1038,7 @@ onMounted(reload)
                 </label>
               </div>
               <div class="mc-meta">
-                <label>Points <input v-model.number="item.points" type="number" style="width:60px;" title="Points"></label>
+                <label>Points <input v-model.number="item.points" type="number" min="1" max="10" step="1" style="width:60px;" title="Whole-number points per question: 1–10" @input="limitPoints(item)" @blur="clampPoints(item)"></label>
                 <label>Threshold % <input v-model.number="item.threshold" type="number" min="0" max="100" style="width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(item)" @blur="clampThreshold(item)"></label>
               </div>
             </div>
@@ -1062,7 +1068,7 @@ onMounted(reload)
                         <option value="False">False</option>
                       </select>
                     </td>
-                    <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
+                    <td><input v-model.number="item.points" type="number" min="1" max="10" step="1" style="text-align:center;width:60px;" title="Whole-number points per question: 1–10" @input="limitPoints(item)" @blur="clampPoints(item)"></td>
                     <td><input v-model.number="item.threshold" type="number" min="0" max="100" style="text-align:center;width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(item)" @blur="clampThreshold(item)"></td>
                     <td>
                       <button class="btn btn-danger btn-small" title="Remove this statement." aria-label="Remove this statement" @click="removeItemFromSection(section, item.uid)">✕</button>
@@ -1093,7 +1099,7 @@ onMounted(reload)
                     <td><input v-model="item.question_text" type="text" title="Question text" :data-validation-key="fieldKey(section, item, 'question')" :class="{ invalid: isInvalid(fieldKey(section, item, 'question')) }" :aria-invalid="isInvalid(fieldKey(section, item, 'question'))" @input="clearInvalid(fieldKey(section, item, 'question'))"></td>
                     <td><input v-model="item.correct" type="text" title="Correct answer" :data-validation-key="fieldKey(section, item, 'correct')" :class="{ invalid: isInvalid(fieldKey(section, item, 'correct')) }" :aria-invalid="isInvalid(fieldKey(section, item, 'correct'))" @input="clearInvalid(fieldKey(section, item, 'correct'))"></td>
                     <td><input v-model="item.alternatives" type="text" title="Alternative answers"></td>
-                    <td><input v-model.number="item.points" type="number" style="text-align:center;width:60px;" title="Points"></td>
+                    <td><input v-model.number="item.points" type="number" min="1" max="10" step="1" style="text-align:center;width:60px;" title="Whole-number points per question: 1–10" @input="limitPoints(item)" @blur="clampPoints(item)"></td>
                     <td><input v-model.number="item.threshold" type="number" min="0" max="100" style="text-align:center;width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(item)" @blur="clampThreshold(item)"></td>
                     <td>
                       <button class="btn btn-danger btn-small" title="Remove this question." aria-label="Remove this question" @click="removeItemFromSection(section, item.uid)">✕</button>
@@ -1135,7 +1141,7 @@ onMounted(reload)
               </div>
               <div v-for="blank in group.blanks" :key="blank.uid" class="enum-blank-row">
                 <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer" :data-validation-key="fieldKey(section, group, `blank-${blank.uid}`)" :class="{ invalid: isInvalid(fieldKey(section, group, `blank-${blank.uid}`)) }" :aria-invalid="isInvalid(fieldKey(section, group, `blank-${blank.uid}`))" @input="clearInvalid(fieldKey(section, group, `blank-${blank.uid}`))">
-                <label>Points <input v-model.number="blank.points" type="number" style="width:60px;" title="Points"></label>
+                <label>Points <input v-model.number="blank.points" type="number" min="1" max="10" step="1" style="width:60px;" title="Whole-number points per question: 1–10" @input="limitPoints(blank)" @blur="clampPoints(blank)"></label>
                 <label>Threshold % <input v-model.number="blank.threshold" type="number" min="0" max="100" style="width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(blank)" @blur="clampThreshold(blank)"></label>
                 <button
                   class="btn btn-danger btn-small"

@@ -8,6 +8,7 @@ import datetime
 import logging
 import shutil
 from pathlib import Path, PurePosixPath
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.grading_progress import report_progress, read_progress
 from app.image_formats import ImageFormatError, SUPPORTED_IMAGE_EXTENSIONS, heif_to_jpeg, is_heif_filename
 from app.inference import pipeline as inference_pipeline
 from app.models import (
@@ -223,18 +225,33 @@ def clear_session(session_id: int, faculty: Faculty = Depends(get_current_facult
     _remove_session_files(session_id)
 
 
+@router.get("/{session_id}/progress/{progress_token}")
+def submission_progress(
+    session_id: int, progress_token: UUID,
+    faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db),
+):
+    _owned_session(session_id, faculty, db)
+    return read_progress(session_id, progress_token)
+
+
 @router.post("/{session_id}/sheets", status_code=201)
 async def upload_sheets(
     session_id: int,
     files: list[UploadFile] = File(...),
     consent_confirmed: bool = Form(False),
+    progress_token: UUID | None = Form(None),
     faculty: Faculty = Depends(get_current_faculty),
     db: Session = Depends(get_db),
 ):
     """Grades one student's submission -- see _grade_submission."""
     _uploads_in_flight[session_id] = _uploads_in_flight.get(session_id, 0) + 1
     try:
-        return await _grade_submission(session_id, files, consent_confirmed, faculty, db)
+        _owned_session(session_id, faculty, db)
+        notify = lambda fraction, stage: report_progress(session_id, progress_token, fraction, stage)
+        notify(0.01, 'Preparing pages')
+        result = await _grade_submission(session_id, files, consent_confirmed, faculty, db, notify)
+        notify(1, 'Cancelled' if result.get('cancelled') else 'Submission finished')
+        return result
     finally:
         remaining = _uploads_in_flight.get(session_id, 1) - 1
         if remaining > 0:
@@ -250,6 +267,7 @@ async def _grade_submission(
     consent_confirmed: bool,
     faculty: Faculty,
     db: Session,
+    on_progress=None,
 ):
     """One transaction PER SUBMISSION (V006), per INTEGRATION_CONTRACT.md
     section 5's "all or nothing": a crash halfway must leave no trace of
@@ -354,6 +372,8 @@ async def _grade_submission(
         )
         db.add(page)
         pages.append(page)
+        if on_progress:
+            on_progress(0.05 * page_no / len(files), f'Prepared page {page_no} of {len(files)}')
     db.commit()
 
     try:
@@ -367,6 +387,7 @@ async def _grade_submission(
             crop_dir,
             sheet_code,
             lambda: session_id in _cancelled_sessions,
+            on_progress,
         )
     except inference_pipeline.PipelineCancelled:
         # The teacher cancelled while this submission was being graded --
@@ -389,6 +410,8 @@ async def _grade_submission(
         db.commit()
         return {"sheet_ids": [sheet.sheet_id]}
 
+    if on_progress:
+        on_progress(0.97, 'Saving grades')
     identity = result["identity"]
     db.add(
         StudentInfo(

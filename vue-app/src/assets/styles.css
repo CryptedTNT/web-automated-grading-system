@@ -1078,12 +1078,21 @@ tr.qb-item-incomplete > td { background: #FFFBF2; }
 }
 
 /* ---------- Capture Live modal ---------- */
+/* No in-page video preview any more -- capturing opens the device's own
+   camera app instead (see UploadView.vue's openCamera/captureFallback),
+   so this is just the small toast-style dialog around the page counter,
+   the "Open Camera" button, and the last-page thumbnail. */
 .camera-box { min-width: 320px; max-width: 560px; width: 100%; }
-.camera-preview {
-  width: 100%; background: #000; border-radius: var(--radius-sm);
-  overflow: hidden; aspect-ratio: 4 / 3;
+
+@media (max-width: 720px) {
+  /* .toast-overlay .camera-box, not plain .camera-box: the generic mobile
+     rule further down (.toast-box { width: calc(100% - 32px) }) matches
+     this same element at equal specificity and comes later in the file, so
+     it otherwise wins the cascade and leaves a 32px-narrower box behind. */
+  .toast-overlay .camera-box {
+    max-width: none; min-width: 0;
+  }
 }
-.camera-preview video { width: 100%; height: 100%; object-fit: cover; }
 
 /* ---------- Image preview modal ---------- */
 .preview-box { min-width: 280px; max-width: 720px; width: 100%; }

@@ -12,12 +12,45 @@ import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage } from '@/services/dialog.js'
 import { canonicalSection } from '@/services/studentDirectory.js'
+import { scoreByType } from '@/services/scoreSummary.js'
+import { validManualScore } from '@/services/manualScoring.js'
 
 const router = useRouter()
 const store = useAppStore()
 
 const result = ref(null)
 const items = ref([])
+const scoringItem = ref(null)
+const awardedPoints = ref('')
+const savingPoints = ref(false)
+
+function openScoring(item) {
+  scoringItem.value = item
+  awardedPoints.value = item.earned ?? 0
+}
+
+async function savePoints() {
+  if (savingPoints.value || !scoringItem.value) return
+  const item = scoringItem.value
+  const studentId = result.value.id
+  if (!validManualScore(awardedPoints.value, item.points)) {
+    await showMessage('Invalid Points', `Enter points from 0 to ${item.points}, with at most two decimal places.`)
+    return
+  }
+  savingPoints.value = true
+  try {
+    await API.updateResultItem(item.id, { override_action: 'manual_score_override', awarded_score: Number(awardedPoints.value) })
+    if (store.selectedStudentResultId !== studentId) return
+    result.value = await API.getStudentResultById(studentId)
+    items.value = await API.resultItems(studentId)
+    scoringItem.value = null
+  } catch (error) {
+    await showMessage('Could Not Save Points', error.message || 'Please try again.')
+  } finally {
+    savingPoints.value = false
+  }
+}
+const typeScores = computed(() => scoreByType(items.value))
 const editingIdentity = ref(false)
 const savingIdentity = ref(false)
 const identityForm = ref({ name: '', section: '' })
@@ -25,6 +58,7 @@ const identityForm = ref({ name: '', section: '' })
 watch(
   () => store.selectedStudentResultId,
   async (id) => {
+    scoringItem.value = null
     result.value = id ? await API.getStudentResultById(id) : null
     items.value = result.value ? await API.resultItems(result.value.id) : []
     editingIdentity.value = false
@@ -49,6 +83,7 @@ function statusClass(status) {
   // badge on this page used to render as the gray fallback because these
   // comparisons never matched the real data.
   if (status === 'correct') return 'badge-success'
+  if (status === 'partial') return 'badge-blue'
   if (status === 'flagged') return 'badge-warning'
   if (status === 'incorrect') return 'badge-danger'
   return 'badge-gray'
@@ -166,6 +201,18 @@ async function saveIdentity() {
       </div>
     </section>
 
+    <section class="card" v-if="typeScores.length">
+      <div class="card-title">Score by Question Type</div>
+      <div class="type-score-grid">
+        <div v-for="score in typeScores" :key="score.type" class="type-score">
+          <div>{{ score.type }}</div>
+          <strong>{{ score.earned }} / {{ score.total }}</strong>
+          <div class="muted-text">{{ score.count }} item(s)<span v-if="score.flagged"> · {{ score.flagged }} awaiting review</span></div>
+        </div>
+      </div>
+      <p v-if="flaggedCount" class="muted-text">Scores are provisional until flagged answers have been reviewed.</p>
+    </section>
+
     <section class="card">
       <div class="table-wrapper student-result-table">
         <table>
@@ -174,7 +221,7 @@ async function saveIdentity() {
               <th>#</th><th>Type</th><th>Group</th><th>Student Answer</th>
               <th>Correct Answer</th><th>Match %</th><th>Score</th>
               <th>Auto Result</th><th>Final Result</th><th>Manual</th>
-              <th>Remarks</th>
+              <th>Remarks</th><th>Manual Scoring</th>
             </tr>
           </thead>
           <tbody>
@@ -192,13 +239,14 @@ async function saveIdentity() {
                 </span>
               </td>
               <td>
-                <span class="badge" :class="statusClass(item.status)">{{ item.status }}</span>
+                <span class="badge" :class="statusClass(item.status)">{{ item.status === 'partial' ? 'Partial Credit' : item.status }}</span>
               </td>
               <td>{{ item.manual_override ? 'Yes' : 'No' }}</td>
               <td class="remarks-cell">{{ item.remarks || '' }}</td>
+              <td><button type="button" class="btn btn-secondary btn-small" :disabled="savingPoints" @click="openScoring(item)">Set Points</button></td>
             </tr>
             <tr v-if="!items.length">
-              <td colspan="11" class="table-empty">No item-level records are available.</td>
+              <td colspan="12" class="table-empty">No item-level records are available.</td>
             </tr>
           </tbody>
         </table>
@@ -217,5 +265,24 @@ async function saveIdentity() {
         </button>
       </div>
     </section>
+    <div v-if="scoringItem" class="toast-overlay">
+      <form class="toast-box" role="dialog" aria-modal="true" aria-labelledby="manual-score-title" @submit.prevent="savePoints">
+        <div id="manual-score-title" class="toast-title">Manual Score — Question {{ scoringItem.item_no }}</div>
+        <p class="muted-text">Student answer: {{ scoringItem.student_answer || '(blank)' }}</p>
+        <label for="student-manual-score" class="form-label">Points Awarded (out of {{ scoringItem.points }})</label>
+        <input id="student-manual-score" v-model="awardedPoints" type="number" min="0" :max="scoringItem.points" step="0.01" required>
+        <p class="muted-text">Partial credit keeps the extracted answer and original automatic result unchanged.</p>
+        <div class="toast-actions">
+          <button type="button" class="btn btn-secondary" :disabled="savingPoints" @click="scoringItem = null">Cancel</button>
+          <button type="submit" class="btn btn-primary" :disabled="savingPoints">{{ savingPoints ? 'Saving…' : 'Save Points' }}</button>
+        </div>
+      </form>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.type-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.type-score { padding: 14px; border: 1px solid rgba(128,128,128,0.3); border-radius: 10px; }
+.type-score strong { display: block; font-size: 1.3rem; margin: 8px 0; }
+</style>

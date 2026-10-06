@@ -29,6 +29,11 @@ export const BASE = '/api'
    in probe), not a dead session. Returns true if it handled the
    response (a reload is already underway, so the caller should stop). */
 function handleIfSessionExpired(res, path) {
+  if (res.status === 403 && res.headers.get('X-Email-Verification-Required') === 'true') {
+    window.location.hash = '#/verify-email'
+    window.location.reload()
+    return true
+  }
   if (res.status !== 401 || path === '/auth/login' || path === '/auth/me') return false
   window.location.hash = '#/login?status=expired'
   window.location.reload()
@@ -54,12 +59,13 @@ async function safeFetch(url, opts) {
   }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, signal) {
   const opts = {
     method,
     credentials: 'include',
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   }
   const res = await safeFetch(BASE + path, opts)
   if (res.status === 204) return null
@@ -246,7 +252,10 @@ export const API = {
   async clearSession(sessionId) {
     await del(`/sessions/${sessionId}`)
   },
-  async uploadSheetGroup(sessionId, files, consentConfirmed, signal) {
+  async submissionProgress(sessionId, token, signal) {
+    return request('GET', `/sessions/${sessionId}/progress/${token}`, undefined, signal)
+  },
+  async uploadSheetGroup(sessionId, files, consentConfirmed, signal, progressToken) {
     // Not part of database.js's surface -- there was no equivalent
     // concept when grading was a client-side placeholder. `files` is
     // every page of ONE student's submission, in page order (page 1
@@ -264,6 +273,7 @@ export const API = {
     const formData = new FormData()
     for (const file of files) formData.append('files', file)
     formData.append('consent_confirmed', consentConfirmed ? 'true' : 'false')
+    if (progressToken) formData.append('progress_token', progressToken)
     const res = await safeFetch(`${BASE}/sessions/${sessionId}/sheets`, {
       method: 'POST',
       credentials: 'include',
@@ -332,6 +342,7 @@ export const API = {
     await post(`/results/${itemId}/review`, {
       action,
       corrected_answer: updates.student_answer ?? null,
+      awarded_score: updates.awarded_score ?? null,
     })
   },
   async getFirstFlaggedItem(studentResultId, sessionId) {

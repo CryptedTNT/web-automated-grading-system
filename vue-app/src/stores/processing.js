@@ -10,6 +10,7 @@
 
 import { defineStore } from 'pinia'
 import { API } from '@/services/api.js'
+import { batchProgress, progressToken } from '@/services/gradingProgress.js'
 import { useAppStore } from './app.js'
 import { showMessage } from '@/services/dialog.js'
 import { sessionLabel, nextSessionNumber, refreshSessionNumbers } from '@/services/sessionNumbers.js'
@@ -41,6 +42,7 @@ export const useProcessingStore = defineStore('processing', {
   state: () => ({
     status: 'idle',
     progress: 0,
+    progressStage: '',
     completed: 0,
     total: 0,
     currentFile: '',
@@ -147,13 +149,10 @@ export const useProcessingStore = defineStore('processing', {
       }
     },
 
-    /* Each group (one student's whole submission, one or more pages) is
-       its own request to POST /sessions/<id>/sheets -- that call blocks
-       until the real YOLO+TrOCR grading for that submission has
-       committed server-side, so looping group-by-group (rather than
-       one batched request for the whole queue) is what lets this
-       progress bar/log reflect real per-student completions instead of
-       a single all-or-nothing wait. */
+    /* Each submission is uploaded independently. While its request is
+       running, poll its UUID-scoped backend progress: page detection,
+       region recognition, and saving grades advance the original bar
+       before the whole submission finishes. No timer-generated percentage. */
     async _run(groups, keyId) {
       let sessionId = null
       const app = useAppStore()
@@ -183,12 +182,33 @@ export const useProcessingStore = defineStore('processing', {
           // network blip on submission #10 shouldn't cost #11-50 too.
           // Logging it and moving on keeps the rest of the run's progress.
           currentAbortController = new AbortController()
+          const token = progressToken()
+          const pollAbort = new AbortController()
+          let polling = true
+          let pollTimer
+          this.progressStage = 'Uploading pages'
+          const poll = async () => {
+            try {
+              const update = await API.submissionProgress(sessionId, token, pollAbort.signal)
+              if (polling && !this.cancelRequested) {
+                this.progress = Math.max(this.progress, batchProgress(index, groups.length, update.fraction))
+                this.progressStage = update.stage
+              }
+            } catch {
+              // Polling failures must not cancel grading. The next successful
+              // read catches up to real work without inventing progress.
+            } finally {
+              if (polling && !this.cancelRequested) pollTimer = setTimeout(poll, 500)
+            }
+          }
+          pollTimer = setTimeout(poll, 0)
           try {
             const uploaded = await API.uploadSheetGroup(
               sessionId,
               group.pages.map((entry) => entry.file),
               app.consentConfirmed,
               currentAbortController.signal,
+              token,
             )
             if (uploaded?.cancelled) {
               // The server stopped grading this submission and discarded it
@@ -217,11 +237,15 @@ export const useProcessingStore = defineStore('processing', {
               'error',
             )
           } finally {
+            polling = false
+            clearTimeout(pollTimer)
+            pollAbort.abort()
             currentAbortController = null
+            this.progressStage = ''
           }
 
           this.completed = index + 1
-          this.progress = Math.round((this.completed / groups.length) * 100)
+          this.progress = batchProgress(this.completed, groups.length, 0)
         }
 
         if (this.cancelRequested) {

@@ -2,8 +2,7 @@
 /* ============================================================
    VerifyEmailView.vue — post-signup (and Settings-triggered) email
    verification step. A code is sent automatically on mount; the
-   teacher can verify it here or click "Not now" and verify later
-   from Settings (see SettingsView.vue's Account tab).
+   teacher must verify it before accessing the application.
    ============================================================ */
 
 import { ref, onMounted } from 'vue'
@@ -81,12 +80,14 @@ async function verify() {
   }
 
   if (store.currentUser) store.currentUser.email_verified = true
+  await store.clearRuntimeSelection()
   await showMessage('Email Verified', 'Your email address has been verified.')
   router.push({ name: 'dashboard' })
 }
 
-function notNow() {
-  router.push({ name: 'dashboard' })
+async function backToLogin() {
+  await store.signOut()
+  router.push({ name: 'login' })
 }
 
 function clearInvalid() {
@@ -142,16 +143,16 @@ function clearInvalid() {
       <div class="form-group">
         <button
           class="btn btn-secondary w-full"
-          title="Skip for now — you can verify your email later from Settings."
-          @click="notNow"
+          title="Sign out and return to login."
+          @click="backToLogin"
         >
-          Not now
+          Back to Login
         </button>
       </div>
 
       <div class="spacer"></div>
       <div class="muted-text text-center">
-        You'll need a verified email to reset your password if you ever forget it.
+        You must verify your email before accessing the system. Check your spam folder too.
       </div>
     </div>
   </div>

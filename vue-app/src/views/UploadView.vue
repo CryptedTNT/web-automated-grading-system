@@ -39,7 +39,9 @@ const SUPPORTED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.bmp', '.tif', '
 const HEIF_EXTENSIONS = new Set(['.heic', '.heif'])
 
 const fileInput = ref(null)
+const photoInput = ref(null)
 const folderInput = ref(null)
+const sourceDialog = ref(null)
 const dragOver = ref(false)
 
 // The webkitdirectory/directory attributes in the template below don't
@@ -82,6 +84,7 @@ async function collectDirectoryFiles(dirHandle, pathPrefix) {
 }
 
 async function browseFolder() {
+  sourceDialog.value = null
   if (!supportsDirectoryPicker) {
     folderInput.value?.click()
     return
@@ -283,9 +286,15 @@ function chunkFlat(entries) {
   return result
 }
 
-function onFilePicked(event, source) {
-  addFiles(Array.from(event.target.files || []), source)
+async function onFilePicked(event, source) {
+  const files = Array.from(event.target.files || [])
   event.target.value = '' // let the same file be picked again
+  if (source === 'Folder' && files.length && !files.some((file) => file.webkitRelativePath?.includes('/'))) {
+    await showMessage('Folder Selection Not Supported', 'Your browser returned individual files, not a folder. These images will be grouped using Pages per Student instead. For student subfolders, use a browser that supports folder selection.')
+    await addFiles(files, 'Images')
+    return
+  }
+  await addFiles(files, source)
 }
 
 function droppedFile(entry) {
@@ -357,8 +366,16 @@ function onDragLeave(event) {
 /* Clicking the zone opens the picker, but not when a button inside
    it was the actual target. */
 function openFilePicker(event) {
-  if (event?.target?.closest?.('button')) return
-  fileInput.value?.click()
+  if (event?.target?.closest?.('button, input')) return
+  sourceDialog.value = 'images'
+}
+
+function chooseImageSource(source) {
+  sourceDialog.value = null
+  // Trigger synchronously while this click still has user activation.
+  const input = source === 'photos' ? photoInput.value : fileInput.value
+  if (input) input.value = ''
+  input?.click()
 }
 
 function clearQueue() {
@@ -599,11 +616,16 @@ function closePreview() {
 
 /* ---------------------------------------------------------- Capture Live */
 
-const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices && window.isSecureContext
+// Opens the device's own camera app (via the hidden `capture` file input
+// below) instead of an in-page getUserMedia live-preview. This used to try
+// an in-page preview first, with the native app as a fallback only when
+// getUserMedia/HTTPS was unavailable -- but the native app gives the
+// phone's own flash/focus controls, which a web page cannot replicate
+// once the stream is lost to zoom/crop-mismatched preview sizing, and it
+// works identically over plain HTTP and HTTPS with no permission prompt.
 const cameraOpen = ref(false)
-const cameraError = ref('')
-const videoEl = ref(null)
-let mediaStream = null
+const nativeCaptureInput = ref(null)
+
 /* Pages captured so far for the student currently being photographed --
    committed into a real group only once "Finish Student" is clicked. */
 const capturedPages = ref([])
@@ -612,51 +634,31 @@ const targetPageCount = computed(() => Math.max(1, parseInt(pagesPerStudent.valu
 const captureComplete = computed(() => capturedPages.value.length >= targetPageCount.value)
 const lastCapturedPage = computed(() => capturedPages.value[capturedPages.value.length - 1] || null)
 
-async function openCamera() {
-  cameraError.value = ''
+function openCamera() {
   capturedPages.value = []
   cameraOpen.value = true
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
-      audio: false,
-    })
-    if (videoEl.value) videoEl.value.srcObject = mediaStream
-  } catch (error) {
-    cameraError.value = error?.message || 'Could not access the camera.'
-  }
-}
-
-function stopStream() {
-  mediaStream?.getTracks().forEach((track) => track.stop())
-  mediaStream = null
 }
 
 function closeCamera() {
-  stopStream()
   cameraOpen.value = false
   capturedPages.value = []
 }
-onUnmounted(stopStream)
 
-function capturePage() {
-  // Guards the data, not just the button: without this, a fast double-click
-  // (or a click landing right as Vue re-renders the disabled state) could
-  // still sneak an extra page in between the click and the button actually
-  // disabling -- this is what a stray page count past "Pages per student"
-  // was coming from.
-  if (!videoEl.value || captureComplete.value) return
-  const canvas = document.createElement('canvas')
-  canvas.width = videoEl.value.videoWidth
-  canvas.height = videoEl.value.videoHeight
-  canvas.getContext('2d').drawImage(videoEl.value, 0, 0)
-  canvas.toBlob((blob) => {
-    if (!blob) return
-    const file = new File([blob], `capture-${Date.now()}-p${currentPageNo.value}.jpg`, { type: 'image/jpeg' })
-    const entry = normalizeEntry(file, 'Camera')
-    capturedPages.value = [...capturedPages.value, entry]
-    ensureThumb(entry)
-  }, 'image/jpeg', 0.92)
+function addCapturedPage(file) {
+  if (!cameraOpen.value || captureComplete.value) return
+  const entry = normalizeEntry(file, 'Camera')
+  capturedPages.value = [...capturedPages.value, entry]
+  ensureThumb(entry)
+}
+
+function captureFallback() {
+  if (captureComplete.value) return
+  if (nativeCaptureInput.value) nativeCaptureInput.value.value = ''
+  nativeCaptureInput.value?.click()
+}
+function onNativeCapture(event) {
+  const file = event.target.files?.[0]
+  if (file) addCapturedPage(file)
 }
 
 function retakeLastPage() {
@@ -691,6 +693,7 @@ function doneCapturing() {
 // priority since it can be opened on top of the camera modal.
 function onModalKeydown(event) {
   if (event.key !== 'Escape') return
+  if (sourceDialog.value) { sourceDialog.value = null; return }
   if (previewEntry.value) closePreview()
   else if (cameraOpen.value) doneCapturing()
 }
@@ -794,8 +797,8 @@ async function proceed() {
           tabindex="0"
           aria-label="Choose or drop answer sheet images or folders"
           @click="openFilePicker"
-          @keydown.enter.prevent="fileInput?.click()"
-          @keydown.space.prevent="fileInput?.click()"
+          @keydown.enter.self.prevent="sourceDialog = 'images'"
+          @keydown.space.self.prevent="sourceDialog = 'images'"
           @dragover.prevent="dragOver = true"
           @dragleave="onDragLeave"
           @drop.prevent="onDrop"
@@ -805,17 +808,16 @@ async function proceed() {
           <div class="muted-text">Drop a class folder to keep student subfolders together.</div>
           <div class="muted-text">JPG, JPEG, PNG, BMP, TIF, TIFF, HEIC, and HEIF</div>
           <div class="flex gap-8 flex-wrap justify-center">
-            <button type="button" class="btn btn-primary" @click.stop="fileInput?.click()">
+            <button type="button" class="btn btn-primary" @click.stop="sourceDialog = 'images'">
               Browse Images
             </button>
-            <button type="button" class="btn btn-secondary" @click.stop="browseFolder">
+            <button type="button" class="btn btn-secondary" @click.stop="sourceDialog = 'folder'">
               Browse Folder
             </button>
             <button
               type="button"
               class="btn btn-secondary"
-              :disabled="!cameraSupported"
-              :title="cameraSupported ? 'Photograph pages directly, one student at a time.' : 'Live capture needs a secure connection (HTTPS or localhost).'"
+              title="Photograph pages directly, one student at a time."
               @click.stop="openCamera"
             >
               Capture Live
@@ -823,11 +825,20 @@ async function proceed() {
           </div>
 
           <input
+            ref="photoInput"
+            type="file"
+            multiple
+            accept="image/*"
+            hidden
+            @click.stop
+            @change="onFilePicked($event, 'Images')"
+          >
+          <input
             ref="fileInput"
             type="file"
             multiple
-            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
+            @click.stop
             @change="onFilePicked($event, 'Images')"
           >
           <input
@@ -836,9 +847,19 @@ async function proceed() {
             multiple
             webkitdirectory
             directory
-            accept=".jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif"
             hidden
+            @click.stop
             @change="onFilePicked($event, 'Folder')"
+          >
+          <!-- Opens the device's native camera app directly (capture="environment"). -->
+          <input
+            ref="nativeCaptureInput"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            hidden
+            @click.stop
+            @change="onNativeCapture"
           >
         </div>
 
@@ -965,49 +986,49 @@ async function proceed() {
       </section>
     </div>
 
+    <div v-if="sourceDialog" class="toast-overlay" @click.self="sourceDialog = null">
+      <div class="toast-box" role="dialog" aria-modal="true" aria-labelledby="upload-source-title">
+        <div id="upload-source-title" class="toast-title">{{ sourceDialog === 'folder' ? 'Choose a Folder or Select Images' : 'Choose Image Source' }}</div>
+        <p class="muted-text">Photo Library uses your phone's Gallery or Google Photos, depending on its browser. Files lets you browse storage and available providers.</p>
+        <p v-if="sourceDialog === 'folder'" class="muted-text">Only Select Folder preserves student subfolders. Selecting photos or individual files groups them using Pages per Student instead.</p>
+        <div class="flex gap-8 flex-wrap">
+          <button v-if="sourceDialog === 'folder'" type="button" class="btn btn-primary" @click="browseFolder">Select Folder</button>
+          <button type="button" class="btn btn-secondary" @click="chooseImageSource('photos')">Photo Library (Gallery / Google Photos)</button>
+          <button type="button" class="btn btn-secondary" @click="chooseImageSource('files')">Browse Files</button>
+        </div>
+        <div class="toast-actions"><button type="button" class="btn btn-secondary" @click="sourceDialog = null">Cancel</button></div>
+      </div>
+    </div>
+
     <!-- Capture Live modal -->
     <div v-if="cameraOpen" class="toast-overlay" @click.self="doneCapturing">
       <div class="toast-box camera-box" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
         <div id="camera-modal-title" class="toast-title">Capture Live</div>
 
-        <div v-if="cameraError" class="muted-text mb-8">{{ cameraError }}</div>
-        <template v-else>
-          <div class="camera-preview">
-            <video ref="videoEl" autoplay playsinline muted></video>
-          </div>
-          <div class="muted-text mt-8 mb-8">
-            <template v-if="captureComplete">All {{ targetPageCount }} page(s) captured for this student.</template>
-            <template v-else>Page {{ currentPageNo }} of {{ targetPageCount }} for this student.</template>
-            {{ capturedPages.length ? `${capturedPages.length} page(s) captured so far.` : '' }}
-          </div>
-
-          <div class="flex gap-8 flex-wrap items-center">
-            <button
-              type="button"
-              class="btn btn-primary"
-              :disabled="captureComplete"
-              :title="captureComplete ? 'All pages for this student are already captured -- use Finish Student & Next.' : ''"
-              @click="capturePage"
-            >
-              {{ captureComplete ? 'All Pages Captured' : `Capture Page ${currentPageNo}` }}
-            </button>
-            <button type="button" class="btn btn-secondary" :disabled="!capturedPages.length" @click="retakeLastPage">
-              Retake Last Page
-            </button>
-            <img
-              v-if="lastCapturedPage"
-              :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
-              alt="Last captured page"
-              class="submission-thumb"
-              title="Last captured page -- click to preview full size"
-              role="button"
-              tabindex="0"
-              @click="openPreview(lastCapturedPage)"
-              @keydown.enter.prevent="openPreview(lastCapturedPage)"
-              @keydown.space.prevent="openPreview(lastCapturedPage)"
-            >
-          </div>
-        </template>
+        <div class="muted-text mb-8">{{ capturedPages.length }} / {{ targetPageCount }} pages captured for this student.</div>
+        <div class="flex gap-8 flex-wrap items-center">
+          <button
+            type="button"
+            class="btn btn-primary"
+            :disabled="captureComplete"
+            @click="captureFallback"
+          >
+            {{ captureComplete ? 'All Pages Captured' : `Open Camera (Page ${currentPageNo})` }}
+          </button>
+          <button type="button" class="btn btn-secondary" :disabled="!capturedPages.length" @click="retakeLastPage">Remove Last Photo to Retake</button>
+          <img
+            v-if="lastCapturedPage"
+            :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
+            alt="Last captured page"
+            class="submission-thumb"
+            title="Last captured page -- click to preview full size"
+            role="button"
+            tabindex="0"
+            @click="openPreview(lastCapturedPage)"
+            @keydown.enter.prevent="openPreview(lastCapturedPage)"
+            @keydown.space.prevent="openPreview(lastCapturedPage)"
+          >
+        </div>
 
         <div class="toast-actions mt-14">
           <button class="btn btn-secondary" @click="doneCapturing">Done</button>

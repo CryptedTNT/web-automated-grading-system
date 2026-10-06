@@ -232,6 +232,11 @@ def review_result(
 ):
     result = _owned_result(result_id, faculty, db)
     item = db.get(AnswerKeyItem, result.item_id)
+    if body.action == 'manual_score_override':
+        if body.awarded_score is None:
+            raise HTTPException(status_code=422, detail='Enter the points to award.')
+        if body.awarded_score > item.points:
+            raise HTTPException(status_code=422, detail=f'Awarded points cannot exceed {item.points}.')
 
     original_answer = None
     if result.recognized_id:
@@ -246,7 +251,14 @@ def review_result(
     previous_status = result.status
     previous_match = float(result.match_score) if result.match_score is not None else 0.0
 
-    if body.action == "accepted_correct":
+    if body.action == 'manual_score_override':
+        result.score = body.awarded_score
+        result.status = 'correct' if body.awarded_score == item.points else 'incorrect' if body.awarded_score == 0 else 'partial'
+        result.remarks = (
+            f'Manually scored: {body.awarded_score} / {item.points} points '
+            f'(was {previous_status} at {previous_match:.1f}% match).'
+        )
+    elif body.action == "accepted_correct":
         result.score, result.status = item.points, "correct"
         result.remarks = f"Manually reviewed: accepted as correct (was {previous_status} at {previous_match:.1f}% match)."
     elif body.action == "marked_incorrect":

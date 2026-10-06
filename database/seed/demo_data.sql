@@ -92,15 +92,21 @@ VALUES
 -- paper back to its record.
 -- ---------------------------------------------------------------------
 INSERT INTO exam_sheet
-    (sheet_id, session_id, answer_key_id, sheet_code, original_filename,
-     image_path, upload_date, processing_status)
+    (sheet_id, session_id, answer_key_id, sheet_code, upload_date)
 VALUES
-    (1, 1, 1, 'AGS-0001-0001', 'scan_001.jpg',
-     'uploads/session_1/scan_001.jpg', '2026-03-10 10:30:05', 'completed'),
-    (2, 1, 1, 'AGS-0001-0002', 'scan_002.jpg',
-     'uploads/session_1/scan_002.jpg', '2026-03-10 10:31:40', 'completed'),
-    (3, 1, 1, 'AGS-0001-0003', 'scan_003.jpg',
-     'uploads/session_1/scan_003.jpg', '2026-03-10 10:33:02', 'reviewed');
+    (1, 1, 1, 'AGS-0001-0001', '2026-03-10 10:30:05'),
+    (2, 1, 1, 'AGS-0001-0002', '2026-03-10 10:31:40'),
+    (3, 1, 1, 'AGS-0001-0003', '2026-03-10 10:33:02');
+
+-- One page per sheet here (none of the demo scans are multi-page) --
+-- see V006__multi_page_sheets.sql for why original_filename/image_path/
+-- processing_status moved off exam_sheet and onto this table.
+INSERT INTO exam_sheet_page
+    (sheet_id, page_no, original_filename, image_path, processing_status, uploaded_at)
+VALUES
+    (1, 1, 'scan_001.jpg', 'uploads/session_1/scan_001.jpg', 'completed', '2026-03-10 10:30:05'),
+    (2, 1, 'scan_002.jpg', 'uploads/session_1/scan_002.jpg', 'completed', '2026-03-10 10:31:40'),
+    (3, 1, 'scan_003.jpg', 'uploads/session_1/scan_003.jpg', 'reviewed',  '2026-03-10 10:33:02');
 
 INSERT INTO student_info
     (student_info_id, sheet_id, name, name_confidence, section, exam_date,

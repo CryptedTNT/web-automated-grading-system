@@ -16,6 +16,8 @@
 
 import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
+import { questionnaireSessions, sectionExportRecords } from './sectionExport.js'
+import { canonicalSection } from './sections.js'
 
 const SHEETJS_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'
 const SHEETJS_INTEGRITY = 'sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT'
@@ -58,23 +60,90 @@ function sanitizeRows(rows) {
   return rows.map((row) => row.map(sanitizeCell))
 }
 
-export async function exportSessionToFile(sessionId, { announce = true } = {}) {
+export async function exportSessionToFile(sessionId, { announce = true, section = '' } = {}) {
   const id = parseInt(sessionId) || null
   if (!id) {
     if (announce) showMessage('No Session', 'No grading session to export.')
     return null
   }
 
-  const results = await API.studentResults(id)
+  const allResults = await API.studentResults(id)
+  const normalizedSection = canonicalSection(section)
+  const results = normalizedSection
+    ? allResults.filter((result) => canonicalSection(result.section) === normalizedSection)
+      .map((result) => ({ ...result, section: normalizedSection }))
+    : allResults
   if (!results.length) {
     if (announce) showMessage('No Data', 'No results in this session to export.')
     return null
   }
 
   const prefs = await API.getExportPreferences()
-  const requestedFilename = await formatExportFilename(id, prefs)
-  const summaryData = sanitizeRows(buildSummaryRows(results, prefs))
-  const detailData = prefs.include_item_scores ? sanitizeRows(await buildDetailRows(results, prefs)) : null
+  let requestedFilename = await formatExportFilename(id, prefs)
+  if (normalizedSection) {
+    const suffix = normalizedSection.replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_')
+    requestedFilename = requestedFilename.replace(/\.(xlsx|csv)$/i, `_${suffix}.$1`)
+  }
+  return exportResultsToFile(results, prefs, requestedFilename, announce)
+}
+
+export async function exportSectionToFile(questionnaireId, section, { sessionIds = null } = {}) {
+  // Re-read at export time so saved identity/grade corrections are included.
+  const sessions = questionnaireSessions(await API.sessions(), questionnaireId)
+    .filter((session) => sessionIds === null || sessionIds.includes(session.id))
+  const lists = await Promise.all(sessions.map((session) => API.studentResults(session.id)))
+  const records = lists.flatMap((results, index) =>
+    results.map((result) => ({ ...result, session: sessions[index] })),
+  )
+  const results = sectionExportRecords(records, questionnaireId, section)
+  if (!results.length) {
+    await showMessage('No Matching Students', 'No completed submissions match this questionnaire and section.')
+    return null
+  }
+  const prefs = await API.getExportPreferences()
+  const name = sessions[0]?.answer_key_name || `questionnaire_${questionnaireId}`
+  const filename = `${name}_${results[0].section}_${new Date().toISOString().slice(0, 10)}`
+    .replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_') +
+    (/\.csv$/i.test(prefs.filename_format || '') ? '.csv' : '.xlsx')
+  return exportResultsToFile(results, prefs, filename, true, true)
+}
+
+export async function exportStudentsToFile(selectedRecords) {
+  if (!selectedRecords.length) {
+    await showMessage('No Students Selected', 'Select students or use the select-all checkbox first.')
+    return null
+  }
+  const selected = [...new Map(selectedRecords.map((record) => [record.id, record])).values()]
+  // Re-read only selected source groups through the existing ownership-checked
+  // API. Fail as a whole if any selected record vanished, rather than quietly
+  // downloading an incomplete class report.
+  const owned = new Map((await API.sessions())
+    .filter((session) => session.status === 'Completed').map((session) => [session.id, session]))
+  const sessionIds = [...new Set(selected.map((record) => record.session.id))]
+  if (sessionIds.some((id) => !owned.has(id))) {
+    throw new Error('Some selected results are no longer available. Refresh Reports and select the students again.')
+  }
+  const lists = await Promise.all(sessionIds.map((id) => API.studentResults(id)))
+  const current = new Map(lists.flatMap((results, index) =>
+    results.map((result) => [result.id, { ...result, session: owned.get(sessionIds[index]), section: canonicalSection(result.section) }]),
+  ))
+  const results = selected.map((record) => current.get(record.id))
+  if (results.some((record) => !record)) {
+    throw new Error('Some selected students are no longer available. Refresh Reports and select the students again.')
+  }
+  const prefs = { ...await API.getExportPreferences(), include_student_info: true, include_total_score: true }
+  const keys = [...new Set(results.map((record) => record.session.answer_key_id))]
+  const sections = [...new Set(results.map((record) => record.section).filter(Boolean))]
+  const questionnaire = keys.length === 1 ? results[0].session.answer_key_name || 'questionnaire' : 'selected_questionnaires'
+  const section = sections.length === 1 ? sections[0] : 'selected_sections'
+  const filename = `${questionnaire}_${section}_students_${new Date().toISOString().slice(0, 10)}.xlsx`
+    .replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_')
+  return exportResultsToFile(results, prefs, filename, true, 'students', { excelOnly: true })
+}
+
+async function exportResultsToFile(results, prefs, requestedFilename, announce, includeSession = false, { excelOnly = false } = {}) {
+  const summaryData = sanitizeRows(buildSummaryRows(results, prefs, includeSession))
+  const detailData = prefs.include_item_scores ? sanitizeRows(await buildDetailRows(results, prefs, includeSession)) : null
   const forceCsv = /\.csv$/i.test(requestedFilename)
 
   if (!forceCsv && (await loadSheetJs())) {
@@ -89,6 +158,8 @@ export async function exportSessionToFile(sessionId, { announce = true } = {}) {
     return filename
   }
 
+  if (excelOnly) throw new Error('The Excel export library could not be loaded. Check your connection and try again. No partial file was downloaded.')
+
   const filename = requestedFilename.replace(/\.xlsx$/i, '.csv')
   const csvRows =
     detailData && detailData.length > 1
@@ -99,8 +170,10 @@ export async function exportSessionToFile(sessionId, { announce = true } = {}) {
   return filename
 }
 
-function buildSummaryRows(results, prefs) {
+function buildSummaryRows(results, prefs, includeSession = false) {
   const header = ['#']
+  if (includeSession === 'students') header.push('Questionnaire', 'Submission Date')
+  else if (includeSession) header.push('Session ID', 'Session Date', 'Questionnaire')
   if (prefs.include_student_info) header.push('Student Name', 'Section')
   if (prefs.include_total_score) header.push('Score', 'Total', '% Score')
   if (prefs.include_flagged_notes) header.push('Flagged', 'Status')
@@ -108,6 +181,8 @@ function buildSummaryRows(results, prefs) {
   const rows = [header]
   results.forEach((result, index) => {
     const row = [index + 1]
+    if (includeSession === 'students') row.push(result.session.answer_key_name || '', result.created_at || result.session.created_at)
+    else if (includeSession) row.push(result.session.id, result.session.created_at, result.session.answer_key_name || '')
     if (prefs.include_student_info) row.push(result.student_name || '', result.section || '')
     if (prefs.include_total_score) row.push(result.score, result.total, result.percentage)
     if (prefs.include_flagged_notes) row.push(result.flagged_count, result.status)
@@ -116,8 +191,10 @@ function buildSummaryRows(results, prefs) {
   return rows
 }
 
-async function buildDetailRows(results, prefs) {
+async function buildDetailRows(results, prefs, includeSession = false) {
   const header = []
+  if (includeSession === 'students') header.push('Questionnaire', 'Submission Date')
+  else if (includeSession) header.push('Session ID', 'Session Date', 'Questionnaire')
   if (prefs.include_student_info) header.push('Student', 'Section')
   header.push('Item #')
   if (prefs.include_question_type) header.push('Type')
@@ -132,6 +209,8 @@ async function buildDetailRows(results, prefs) {
   results.forEach((result, index) => {
     for (const item of itemLists[index]) {
       const row = []
+      if (includeSession === 'students') row.push(result.session.answer_key_name || '', result.created_at || result.session.created_at)
+      else if (includeSession) row.push(result.session.id, result.session.created_at, result.session.answer_key_name || '')
       if (prefs.include_student_info) row.push(result.student_name || '', result.section || '')
       row.push(item.item_no)
       if (prefs.include_question_type) row.push(item.type || '')

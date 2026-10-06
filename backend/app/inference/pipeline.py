@@ -142,6 +142,7 @@ def run_sheet_group(
     crop_dir: Path,
     sheet_code: str,
     should_stop: Callable[[], bool] | None = None,
+    on_progress: Callable[[float, str], None] | None = None,
 ) -> dict:
     """
     image_paths: this submission's page images, in page order (page 1
@@ -171,7 +172,7 @@ def run_sheet_group(
     # expected to have one, but nothing here assumes that.
     identity_boxes: dict[str, tuple[Image.Image, Detection]] = {}
 
-    for image_path in image_paths:
+    for page_index, image_path in enumerate(image_paths):
         check_stop()
         image = Image.open(image_path)
         detections = detect_regions(image_path)
@@ -184,13 +185,18 @@ def run_sheet_group(
                 page_dets.append(det)
         page_dets.sort(key=lambda d: d.y_center)
         all_dets.extend((image, det) for det in page_dets)
+        if on_progress:
+            on_progress(0.05 + 0.15 * (page_index + 1) / len(image_paths), f'Detected page {page_index + 1} of {len(image_paths)}')
 
     sorted_items = sorted(items, key=lambda i: i.item_no)
 
     crop_dir.mkdir(parents=True, exist_ok=True)
     answers: list[dict] = []
+    recognition_total = min(len(all_dets), len(items)) + sum(field in identity_boxes for field in ('name', 'section'))
+    recognition_done = 0
 
     def recognize_and_save(image: Image.Image, det: Detection, item_id: int, suffix: str) -> tuple[str, float, str]:
+        nonlocal recognition_done
         check_stop()
         crop_img = _crop(image, det.bbox, det.polygon)
         crop_path = crop_dir / f"{sheet_code}_item{item_id}_{suffix}.png"
@@ -202,6 +208,9 @@ def run_sheet_group(
         # crossed-out or ambiguous answer remains visible for the teacher to
         # review instead of being changed by an unreliable preprocessor.
         text, confidence = recognizer.recognize_text(crop_img)
+        recognition_done += 1
+        if on_progress:
+            on_progress(0.20 + 0.75 * recognition_done / max(1, recognition_total), f'Recognized region {recognition_done} of {recognition_total}')
         return text, confidence, str(crop_path)
 
     # ---- Global positional pairing: one detection per item, in exam order ----
@@ -370,4 +379,6 @@ def run_sheet_group(
             text, _confidence, _crop_path = recognize_and_save(image, det, 0, field_name)
             identity[field_name] = text
 
+    if on_progress:
+        on_progress(0.95, 'Recognition and answer matching finished')
     return {"identity": identity, "answers": answers}
