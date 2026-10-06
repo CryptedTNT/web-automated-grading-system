@@ -25,8 +25,7 @@
    before processing starts, regardless of which path produced it.
    ============================================================ */
 
-import { computed, markRaw, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { cameraCapabilities, applyCameraControl } from '@/services/cameraControls.js'
+import { computed, markRaw, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
@@ -617,54 +616,16 @@ function closePreview() {
 
 /* ---------------------------------------------------------- Capture Live */
 
-// In-browser capture on mobile and desktop, with native picker fallback.
-const cameraSupported = typeof navigator !== 'undefined'
+// Opens the device's own camera app (via the hidden `capture` file input
+// below) instead of an in-page getUserMedia live-preview. This used to try
+// an in-page preview first, with the native app as a fallback only when
+// getUserMedia/HTTPS was unavailable -- but the native app gives the
+// phone's own flash/focus controls, which a web page cannot replicate
+// once the stream is lost to zoom/crop-mismatched preview sizing, and it
+// works identically over plain HTTP and HTTPS with no permission prompt.
 const cameraOpen = ref(false)
-const cameraError = ref('')
-const videoEl = ref(null)
 const nativeCaptureInput = ref(null)
-let mediaStream = null
-let cameraGeneration = 0
-const cameraReady = ref(false)
-const controls = ref(cameraCapabilities(null))
-const torchOn = ref(false)
-const controlsBusy = ref(false)
-const controlMessage = ref('')
-const focusDistance = ref(0)
 
-function activeTrack() { return mediaStream?.getVideoTracks()[0] }
-
-async function changeCameraControl(values) {
-  if (controlsBusy.value || !cameraReady.value) return false
-  controlsBusy.value = true
-  controlMessage.value = ''
-  const generation = cameraGeneration
-  try {
-    await applyCameraControl(activeTrack(), values)
-    return generation === cameraGeneration && cameraOpen.value
-  } catch (error) {
-    if (generation === cameraGeneration) controlMessage.value = error.message || 'This control is unavailable on your device.'
-    return false
-  } finally {
-    if (generation === cameraGeneration) controlsBusy.value = false
-  }
-}
-
-async function toggleTorch() {
-  const enabled = !torchOn.value
-  if (await changeCameraControl({ torch: enabled })) torchOn.value = enabled
-}
-
-async function refocus() {
-  if (!controls.value.refocusMode) return
-  if (await changeCameraControl({ focusMode: controls.value.refocusMode })) {
-    controlMessage.value = 'Focus requested. Hold the phone steady and check the preview before capturing.'
-  }
-}
-
-async function setManualFocus() {
-  await changeCameraControl({ focusMode: 'manual', focusDistance: Number(focusDistance.value) })
-}
 /* Pages captured so far for the student currently being photographed --
    committed into a real group only once "Finish Student" is clicked. */
 const capturedPages = ref([])
@@ -673,68 +634,15 @@ const targetPageCount = computed(() => Math.max(1, parseInt(pagesPerStudent.valu
 const captureComplete = computed(() => capturedPages.value.length >= targetPageCount.value)
 const lastCapturedPage = computed(() => capturedPages.value[capturedPages.value.length - 1] || null)
 
-async function openCamera() {
-  stopStream()
-  const generation = cameraGeneration
-  cameraError.value = ''
+function openCamera() {
   capturedPages.value = []
   cameraOpen.value = true
-  if (!navigator.mediaDevices?.getUserMedia || !window.isSecureContext) {
-    cameraError.value = 'Live camera requires HTTPS (or localhost on this device). Use the secure deployed website, or choose a photo below.'
-    return
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      // ideal, not exact/min: a phone's rear camera commonly supports far
-      // more than this, and requesting it as a floor asks for a properly
-      // sharp frame instead of whatever low-res default the browser picks;
-      // exact/min would instead throw OverconstrainedError on any camera
-      // that cannot hit it exactly.
-      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false,
-    })
-    // A permission prompt can finish after the modal has closed.
-    if (generation !== cameraGeneration || !cameraOpen.value) {
-      stream.getTracks().forEach((track) => track.stop())
-      return
-    }
-    mediaStream = stream
-    await nextTick()
-    if (generation !== cameraGeneration || !cameraOpen.value) return
-    if (videoEl.value) {
-      videoEl.value.srcObject = stream
-      await videoEl.value.play()
-    }
-    if (generation !== cameraGeneration || !cameraOpen.value) return
-    controls.value = cameraCapabilities(activeTrack())
-    const distance = activeTrack()?.getSettings?.().focusDistance
-    focusDistance.value = Math.min(controls.value.focusMax, Math.max(controls.value.focusMin, distance ?? controls.value.focusMin))
-    cameraReady.value = true
-    if (controls.value.autoFocus) await changeCameraControl({ focusMode: 'continuous' })
-  } catch (error) {
-    if (generation !== cameraGeneration) return
-    stopStream()
-    cameraError.value = error?.message || 'Could not access the camera.'
-  }
-}
-
-function stopStream() {
-  cameraGeneration += 1
-  mediaStream?.getTracks().forEach((track) => track.stop())
-  mediaStream = null
-  cameraReady.value = false
-  torchOn.value = false
-  controlsBusy.value = false
-  controls.value = cameraCapabilities(null)
-  controlMessage.value = ''
 }
 
 function closeCamera() {
-  stopStream()
   cameraOpen.value = false
   capturedPages.value = []
 }
-onUnmounted(stopStream)
 
 function addCapturedPage(file) {
   if (!cameraOpen.value || captureComplete.value) return
@@ -743,29 +651,6 @@ function addCapturedPage(file) {
   ensureThumb(entry)
 }
 
-function capturePage() {
-  // Guards the data, not just the button: without this, a fast double-click
-  // (or a click landing right as Vue re-renders the disabled state) could
-  // still sneak an extra page in between the click and the button actually
-  // disabling -- this is what a stray page count past "Pages per student"
-  // was coming from.
-  if (!cameraReady.value || !videoEl.value || captureComplete.value || controlsBusy.value) return
-  if (!videoEl.value.videoWidth || !videoEl.value.videoHeight) {
-    controlMessage.value = 'Wait for the camera preview to appear before capturing.'
-    return
-  }
-  const generation = cameraGeneration
-  const canvas = document.createElement('canvas')
-  canvas.width = videoEl.value.videoWidth
-  canvas.height = videoEl.value.videoHeight
-  canvas.getContext('2d').drawImage(videoEl.value, 0, 0)
-  canvas.toBlob((blob) => {
-    if (!blob || generation !== cameraGeneration) return
-    addCapturedPage(new File([blob], `capture-${Date.now()}-p${currentPageNo.value}.jpg`, { type: 'image/jpeg' }))
-  }, 'image/jpeg', 0.92)
-}
-
-// Fallback when webcam access fails or HTTPS is unavailable.
 function captureFallback() {
   if (captureComplete.value) return
   if (nativeCaptureInput.value) nativeCaptureInput.value.value = ''
@@ -932,8 +817,7 @@ async function proceed() {
             <button
               type="button"
               class="btn btn-secondary"
-              :disabled="!cameraSupported"
-              :title="cameraSupported ? 'Photograph pages directly, one student at a time.' : 'Live capture needs a secure connection (HTTPS or localhost) on this device.'"
+              title="Photograph pages directly, one student at a time."
               @click.stop="openCamera"
             >
               Capture Live
@@ -967,7 +851,7 @@ async function proceed() {
             @click.stop
             @change="onFilePicked($event, 'Folder')"
           >
-          <!-- File-picker fallback when the live camera is unavailable. -->
+          <!-- Opens the device's native camera app directly (capture="environment"). -->
           <input
             ref="nativeCaptureInput"
             type="file"
@@ -1121,83 +1005,30 @@ async function proceed() {
       <div class="toast-box camera-box" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title">
         <div id="camera-modal-title" class="toast-title">Capture Live</div>
 
-        <template v-if="cameraError">
-          <div class="muted-text mb-8">{{ cameraError }}</div>
-          <div class="muted-text mb-8">{{ capturedPages.length }} / {{ targetPageCount }} pages captured for this student.</div>
-          <div class="flex gap-8 flex-wrap items-center">
-            <button
-              type="button"
-              class="btn btn-primary"
-              :disabled="captureComplete"
-              @click="captureFallback"
-            >
-              {{ captureComplete ? 'All Pages Captured' : `Choose or Take Photo (Page ${currentPageNo})` }}
-            </button>
-            <button type="button" class="btn btn-secondary" :disabled="!capturedPages.length" @click="retakeLastPage">Remove Last Photo to Retake</button>
-            <img
-              v-if="lastCapturedPage"
-              :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
-              alt="Last captured page"
-              class="submission-thumb"
-              title="Last captured page -- click to preview full size"
-              role="button"
-              tabindex="0"
-              @click="openPreview(lastCapturedPage)"
-              @keydown.enter.prevent="openPreview(lastCapturedPage)"
-              @keydown.space.prevent="openPreview(lastCapturedPage)"
-            >
-          </div>
-        </template>
-        <template v-else>
-          <div class="camera-preview">
-            <video ref="videoEl" autoplay playsinline muted></video>
-          </div>
-          <div class="flex gap-8 flex-wrap items-center mt-8">
-            <button type="button" class="btn btn-secondary" :disabled="!cameraReady || !controls.torch || controlsBusy" :aria-pressed="torchOn" @click="toggleTorch">
-              {{ controls.torch ? (torchOn ? 'Flashlight: On' : 'Flashlight: Off') : 'Flashlight Unavailable' }}
-            </button>
-            <button type="button" class="btn btn-secondary" :disabled="!cameraReady || !controls.refocusMode || controlsBusy" @click="refocus">
-              {{ controls.refocusMode ? 'Refocus Camera' : 'Autofocus Control Unavailable' }}
-            </button>
-          </div>
-          <div v-if="controls.manualFocus" class="form-group mt-8">
-            <label for="camera-focus-distance" class="form-label">Manual Focus — adjust until the text looks sharp</label>
-            <input id="camera-focus-distance" v-model.number="focusDistance" type="range" :min="controls.focusMin" :max="controls.focusMax" :step="controls.focusStep" :disabled="controlsBusy" @change="setManualFocus">
-          </div>
-          <div class="muted-text mt-8" role="status">{{ controlMessage || (cameraReady ? 'Flashlight stays on while capturing. Focus controls depend on your camera and browser.' : 'Opening camera…') }}</div>
-          <div class="muted-text mt-8 mb-8">
-            <template v-if="captureComplete">All {{ targetPageCount }} page(s) captured for this student.</template>
-            <template v-else>Page {{ currentPageNo }} of {{ targetPageCount }} for this student.</template>
-            {{ capturedPages.length ? `${capturedPages.length} page(s) captured so far.` : '' }}
-          </div>
-
-          <div class="flex gap-8 flex-wrap items-center">
-            <button
-              type="button"
-              class="btn btn-primary"
-              :disabled="captureComplete || !cameraReady || controlsBusy"
-              :title="captureComplete ? 'All pages for this student are already captured -- use Finish Student & Next.' : ''"
-              @click="capturePage"
-            >
-              {{ captureComplete ? 'All Pages Captured' : `Capture Page ${currentPageNo}` }}
-            </button>
-            <button type="button" class="btn btn-secondary" :disabled="!capturedPages.length" @click="retakeLastPage">
-              Retake Last Page
-            </button>
-            <img
-              v-if="lastCapturedPage"
-              :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
-              alt="Last captured page"
-              class="submission-thumb"
-              title="Last captured page -- click to preview full size"
-              role="button"
-              tabindex="0"
-              @click="openPreview(lastCapturedPage)"
-              @keydown.enter.prevent="openPreview(lastCapturedPage)"
-              @keydown.space.prevent="openPreview(lastCapturedPage)"
-            >
-          </div>
-        </template>
+        <div class="muted-text mb-8">{{ capturedPages.length }} / {{ targetPageCount }} pages captured for this student.</div>
+        <div class="flex gap-8 flex-wrap items-center">
+          <button
+            type="button"
+            class="btn btn-primary"
+            :disabled="captureComplete"
+            @click="captureFallback"
+          >
+            {{ captureComplete ? 'All Pages Captured' : `Open Camera (Page ${currentPageNo})` }}
+          </button>
+          <button type="button" class="btn btn-secondary" :disabled="!capturedPages.length" @click="retakeLastPage">Remove Last Photo to Retake</button>
+          <img
+            v-if="lastCapturedPage"
+            :src="thumbUrl(lastCapturedPage) || previewUrl(lastCapturedPage)"
+            alt="Last captured page"
+            class="submission-thumb"
+            title="Last captured page -- click to preview full size"
+            role="button"
+            tabindex="0"
+            @click="openPreview(lastCapturedPage)"
+            @keydown.enter.prevent="openPreview(lastCapturedPage)"
+            @keydown.space.prevent="openPreview(lastCapturedPage)"
+          >
+        </div>
 
         <div class="toast-actions mt-14">
           <button class="btn btn-secondary" @click="doneCapturing">Done</button>

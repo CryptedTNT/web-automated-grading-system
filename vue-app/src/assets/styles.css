@@ -1078,33 +1078,20 @@ tr.qb-item-incomplete > td { background: #FFFBF2; }
 }
 
 /* ---------- Capture Live modal ---------- */
+/* No in-page video preview any more -- capturing opens the device's own
+   camera app instead (see UploadView.vue's openCamera/captureFallback),
+   so this is just the small toast-style dialog around the page counter,
+   the "Open Camera" button, and the last-page thumbnail. */
 .camera-box { min-width: 320px; max-width: 560px; width: 100%; }
-.camera-preview {
-  width: 100%; background: #000; border-radius: var(--radius-sm);
-  overflow: hidden; aspect-ratio: 4 / 3;
-}
-.camera-preview video { width: 100%; height: 100%; object-fit: cover; }
 
-/* The reported complaint: on a phone, .camera-box's generic "toast" sizing
-   (a small centered card, `.camera-preview`'s fixed 4:3 -- suited to a
-   landscape webcam, not a portrait sheet of paper held up on a phone)
-   left the actual live preview only a couple hundred pixels tall. Below
-   this width the modal becomes a true fullscreen view instead of a card,
-   with the preview filling whatever space the title/controls do not need,
-   at whatever aspect ratio that leaves (tall on a phone held upright). */
 @media (max-width: 720px) {
   /* .toast-overlay .camera-box, not plain .camera-box: the generic mobile
      rule further down (.toast-box { width: calc(100% - 32px) }) matches
      this same element at equal specificity and comes later in the file, so
      it otherwise wins the cascade and leaves a 32px-narrower box behind. */
   .toast-overlay .camera-box {
-    position: fixed; inset: 0;
-    width: 100%; height: 100%;
-    max-width: none; max-height: none; min-width: 0;
-    border-radius: 0;
-    display: flex; flex-direction: column;
+    max-width: none; min-width: 0;
   }
-  .camera-preview { flex: 1; min-height: 0; aspect-ratio: auto; }
 }
 
 /* ---------- Image preview modal ---------- */
