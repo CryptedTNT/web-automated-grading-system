@@ -5,9 +5,8 @@
 #   docker build -f backend/runpod_handler/Dockerfile -t <you>/ags-trocr-runpod:latest .
 #   docker push <you>/ags-trocr-runpod:latest
 #
-# Model weights are baked into the image (not a RunPod network volume) so
-# a cold start never pays for a download -- see recognizer.py's RunPod
-# notes on why that matters for a small prepaid balance.
+# Private model weights are downloaded at worker startup using HTR_MODEL_REPO
+# and the HF_TOKEN runtime Secret. Never put the token in a build argument.
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
@@ -29,7 +28,7 @@ RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch
 COPY backend/runpod_handler/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/models/htr /model
+ENV PYTHONUNBUFFERED=1 HF_HUB_DISABLE_PROGRESS_BARS=1
 COPY backend/runpod_handler/handler.py .
 
 CMD ["python3", "handler.py"]

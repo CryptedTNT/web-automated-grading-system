@@ -2,3 +2,4 @@ runpod==1.7.0
 transformers>=5.0.0
 safetensors>=0.4.5
 pillow>=10.0.0
+huggingface_hub>=1.0.0
