@@ -22,6 +22,7 @@ import base64
 import io
 import os
 from pathlib import Path
+from threading import RLock
 
 import requests
 import torch
@@ -40,6 +41,7 @@ _RUNPOD_TIMEOUT_S = float(os.getenv("RUNPOD_TIMEOUT_S", "30"))
 
 _processor: AutoProcessor | None = None
 _model: VisionEncoderDecoderModel | None = None
+_local_lock = RLock()
 
 
 def _load():
@@ -122,10 +124,12 @@ def recognize_text(crop: Image.Image) -> tuple[str, float]:
             return result
         # Falls through to local CPU inference below on any RunPod failure.
 
-    processor, _ = _load()
-    pixel_values = processor(images=crop.convert("RGB"), return_tensors="pt").pixel_values.to(_DEVICE)
-
-    text, confidence = _decode(pixel_values, num_beams=1)
-    if confidence >= GREEDY_CONFIDENCE_FLOOR:
-        return text, confidence
-    return _decode(pixel_values, num_beams=BEAM_WIDTH)
+    # Parallel remote requests may fail simultaneously. Serialize the local
+    # fallback to avoid racing model initialization or exhausting CPU/GPU RAM.
+    with _local_lock:
+        processor, _ = _load()
+        pixel_values = processor(images=crop.convert("RGB"), return_tensors="pt").pixel_values.to(_DEVICE)
+        text, confidence = _decode(pixel_values, num_beams=1)
+        if confidence >= GREEDY_CONFIDENCE_FLOOR:
+            return text, confidence
+        return _decode(pixel_values, num_beams=BEAM_WIDTH)

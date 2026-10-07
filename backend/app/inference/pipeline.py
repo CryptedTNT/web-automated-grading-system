@@ -195,6 +195,34 @@ def run_sheet_group(
     recognition_total = min(len(all_dets), len(items)) + sum(field in identity_boxes for field in ('name', 'section'))
     recognition_done = 0
 
+    # Prefetch remote OCR without touching pairing, enumeration matching, or
+    # grading. Object identity keys keep every detection tied to its own crop.
+    remote_results = {}
+    if recognizer.USE_RUNPOD:
+        from app.inference.ocr_parallel import ordered_recognize
+
+        regions = [pair for pair, _item in zip(all_dets, sorted_items)]
+        regions.extend(identity_boxes[field] for field in ("name", "section") if field in identity_boxes)
+
+        def crops():
+            for image, det in regions:
+                check_stop()
+                yield _crop(image, det.bbox, det.polygon)
+
+        def recognized():
+            nonlocal recognition_done
+            recognition_done += 1
+            if on_progress:
+                on_progress(0.20 + 0.75 * recognition_done / max(1, recognition_total),
+                            f'Recognized region {recognition_done} of {recognition_total}')
+
+        results = ordered_recognize(crops(), recognizer.recognize_text, check_stop, recognized)
+        try:
+            for (_image, det), result in zip(regions, results):
+                remote_results[id(det)] = result
+        finally:
+            results.close()
+
     def recognize_and_save(image: Image.Image, det: Detection, item_id: int, suffix: str) -> tuple[str, float, str]:
         nonlocal recognition_done
         check_stop()
@@ -207,9 +235,11 @@ def run_sheet_group(
         # unrelated, higher-confidence word (for example, "DeepQA"). A
         # crossed-out or ambiguous answer remains visible for the teacher to
         # review instead of being changed by an unreliable preprocessor.
-        text, confidence = recognizer.recognize_text(crop_img)
-        recognition_done += 1
-        if on_progress:
+        cached = remote_results.get(id(det))
+        text, confidence = cached if cached is not None else recognizer.recognize_text(crop_img)
+        if cached is None:
+            recognition_done += 1
+        if on_progress and cached is None:
             on_progress(0.20 + 0.75 * recognition_done / max(1, recognition_total), f'Recognized region {recognition_done} of {recognition_total}')
         return text, confidence, str(crop_path)
 
