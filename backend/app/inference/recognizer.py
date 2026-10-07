@@ -2,12 +2,28 @@
 region. The model is a fine-tuned TrOCR-base-sized checkpoint (encoder
 hidden_size 768, decoder d_model 1024 -- see models/htr/config.json),
 saved at backend/models/htr/ as config + tokenizer + model.safetensors.
+
+RunPod Serverless offload (optional): set USE_RUNPOD=true plus
+RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID in .env to send recognition calls
+to a GPU worker instead of running locally on CPU -- see
+runpod_handler/ for the matching handler and Dockerfile. Any RunPod
+failure (timeout, network error, FAILED status, empty balance) falls
+back to the local path below rather than breaking a grading run; this
+is deliberate so a drained prepaid balance degrades to "slow" (CPU),
+never to "broken." Leave USE_RUNPOD unset/false on the public site by
+default -- it is meant to be switched on only for a specific testing or
+demo window, not left on for arbitrary public traffic, since every
+request then spends real RunPod balance.
 """
 
 from __future__ import annotations
 
+import base64
+import io
+import os
 from pathlib import Path
 
+import requests
 import torch
 from PIL import Image
 from transformers import AutoProcessor, VisionEncoderDecoderModel
@@ -16,6 +32,11 @@ _MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models" / "htr"
 _DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 MODEL_NAME = "TrOCR-custom (backend/models/htr)"
+
+USE_RUNPOD = os.getenv("USE_RUNPOD", "false").lower() == "true"
+_RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
+_RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
+_RUNPOD_TIMEOUT_S = float(os.getenv("RUNPOD_TIMEOUT_S", "30"))
 
 _processor: AutoProcessor | None = None
 _model: VisionEncoderDecoderModel | None = None
@@ -65,6 +86,29 @@ def _decode(pixel_values: torch.Tensor, num_beams: int) -> tuple[str, float]:
     return text, float(torch.exp(steps[keep].sum() / count).clamp(0, 1))
 
 
+def _recognize_via_runpod(crop: Image.Image) -> tuple[str, float] | None:
+    """Returns (text, confidence) from the RunPod endpoint, or None on
+    any failure so the caller falls back to local inference."""
+    buf = io.BytesIO()
+    crop.convert("RGB").save(buf, format="PNG")
+    image_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    url = f"https://api.runpod.ai/v2/{_RUNPOD_ENDPOINT_ID}/runsync"
+    headers = {"Authorization": f"Bearer {_RUNPOD_API_KEY}"}
+    payload = {"input": {"image_base64": image_b64}}
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=_RUNPOD_TIMEOUT_S)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "COMPLETED":
+            return None
+        output = data["output"]
+        return output["text"], float(output["confidence"])
+    except Exception:
+        return None
+
+
 def recognize_text(crop: Image.Image) -> tuple[str, float]:
     """Returns (recognized_text, confidence) for one cropped answer
     region. confidence is derived from the decoder's own sequence
@@ -72,6 +116,12 @@ def recognize_text(crop: Image.Image) -> tuple[str, float]:
     generate() doesn't give a single clean per-string confidence the
     way a classifier would, so this is the closest available proxy.
     """
+    if USE_RUNPOD:
+        result = _recognize_via_runpod(crop)
+        if result is not None:
+            return result
+        # Falls through to local CPU inference below on any RunPod failure.
+
     processor, _ = _load()
     pixel_values = processor(images=crop.convert("RGB"), return_tensors="pt").pixel_values.to(_DEVICE)
 
