@@ -18,17 +18,22 @@ the Azure VM's CPU. Mirrors `app/inference/recognizer.py`'s logic exactly
    (Settings -> Billing). This is prepaid: you cannot be charged more than
    what you add.
 
-2. **Build and push the Docker image** (needs Docker Desktop and a free
-   Docker Hub account):
+2. **Deploy straight from GitHub** (preferred -- no local Docker needed):
+   RunPod Console -> Serverless -> New Endpoint -> **GitHub Repo** source
+   -> authorize GitHub -> pick this repo -> branch `main` -> Dockerfile
+   path `backend/runpod_handler/Dockerfile`. RunPod builds from the repo
+   root automatically; no separate "build context" field to set.
+
+   (Alternative: build and push locally instead, if you have Docker
+   Desktop -- run this from the **repo root**, not from backend/:
    ```
-   cd backend
-   docker build -f runpod_handler/Dockerfile -t <your-dockerhub-username>/ags-trocr-runpod:latest .
+   docker build -f backend/runpod_handler/Dockerfile -t <your-dockerhub-username>/ags-trocr-runpod:latest .
    docker login
    docker push <your-dockerhub-username>/ags-trocr-runpod:latest
    ```
+   then pick "Docker Image" as the source instead of GitHub Repo.)
 
-3. **Create the Serverless endpoint** (RunPod console -> Serverless -> New Endpoint):
-   - Container Image: `<your-dockerhub-username>/ags-trocr-runpod:latest`
+3. **GPU and scaling settings** (same page):
    - GPU: pick the **cheapest tier** -- RTX A4000 / A4500 / RTX 4000 / RTX 2000
      class (~$0.00016/sec, ~$0.58/hr active). This model is small (333M
      params); it does not need anything bigger.

@@ -1,6 +1,8 @@
-# Build from the backend/ directory so this can reach ../models/htr:
-#   cd backend
-#   docker build -f runpod_handler/Dockerfile -t <you>/ags-trocr-runpod:latest .
+# Built with the REPO ROOT as context (RunPod's GitHub-build integration
+# always builds from the repo root, not from backend/), so every COPY
+# below starts with "backend/". For a manual local build, run this from
+# the repo root (not from inside backend/):
+#   docker build -f backend/runpod_handler/Dockerfile -t <you>/ags-trocr-runpod:latest .
 #   docker push <you>/ags-trocr-runpod:latest
 #
 # Model weights are baked into the image (not a RunPod network volume) so
@@ -19,10 +21,10 @@ WORKDIR /app
 # image above, or pip will silently resolve a CPU-only build instead.
 RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
-COPY runpod_handler/requirements.txt .
+COPY backend/runpod_handler/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY models/htr /model
-COPY runpod_handler/handler.py .
+COPY backend/models/htr /model
+COPY backend/runpod_handler/handler.py .
 
 CMD ["python3", "handler.py"]
