@@ -10,39 +10,64 @@ Job output: {"text": "...", "confidence": 0.0-1.0}
 
 from __future__ import annotations
 
-import base64
-import io
 import sys
-import time
-import traceback
 
-import runpod
-import torch
-from PIL import Image
-from transformers import AutoProcessor, VisionEncoderDecoderModel
+# DIAGNOSTIC: every crash so far has shown nothing but a bare "exited with
+# exit code 1" -- no Python traceback at all, even with a try/except around
+# model loading. That means it is dying before any of our code runs, most
+# likely a native-level crash (e.g. a CUDA/driver mismatch) during one of
+# the imports below, which a Python except block can never catch. Printing
+# and flushing a marker before each import lets us see the LAST stage that
+# completed, even if the next line kills the process outright.
+print("[startup] stage 0: python is running", flush=True)
+
+import base64  # noqa: E402
+print("[startup] stage 1: base64 OK", flush=True)
+import io  # noqa: E402
+print("[startup] stage 2: io OK", flush=True)
+import time  # noqa: E402
+print("[startup] stage 3: time OK", flush=True)
+import traceback  # noqa: E402
+print("[startup] stage 4: traceback OK", flush=True)
+
+import runpod  # noqa: E402
+print("[startup] stage 5: runpod import OK", flush=True)
+
+import torch  # noqa: E402
+print(f"[startup] stage 6: torch import OK, version={torch.__version__}", flush=True)
+
+print("[startup] stage 7: checking torch.cuda.is_available()...", flush=True)
+_cuda_ok = torch.cuda.is_available()
+print(f"[startup] stage 8: torch.cuda.is_available() = {_cuda_ok}", flush=True)
+
+if _cuda_ok:
+    print("[startup] stage 9: querying GPU device name...", flush=True)
+    print(f"[startup] stage 10: cuda device name: {torch.cuda.get_device_name(0)}", flush=True)
+
+from PIL import Image  # noqa: E402
+print("[startup] stage 11: PIL import OK", flush=True)
+
+from transformers import AutoProcessor, VisionEncoderDecoderModel  # noqa: E402
+print("[startup] stage 12: transformers import OK", flush=True)
 
 MODEL_DIR = "/model"  # baked into the image by the Dockerfile
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda" if _cuda_ok else "cpu"
 
 BEAM_WIDTH = 4
 GREEDY_CONFIDENCE_FLOOR = 0.9
 
-# DIAGNOSTIC: startup used to crash with no visible traceback (the worker
-# exits before RunPod's log viewer can display anything). Catch any
-# startup failure here, print it in full, and then hang instead of
-# exiting -- a worker stuck in this loop stays "running" long enough for
-# the Logs tab to actually show what happened. Remove this try/except
-# (restore the two bare lines) once the real error is found and fixed.
+# Remove this whole try/except (restore the two bare loading lines) once
+# the real crash point is found and fixed.
 try:
-    print(f"[startup] torch={torch.__version__} cuda_available={torch.cuda.is_available()} device={DEVICE}", flush=True)
-    if torch.cuda.is_available():
-        print(f"[startup] cuda device name: {torch.cuda.get_device_name(0)}", flush=True)
-    print("[startup] loading processor...", flush=True)
+    print("[startup] stage 13: loading processor...", flush=True)
     _processor = AutoProcessor.from_pretrained(MODEL_DIR)
-    print("[startup] processor OK, loading model...", flush=True)
-    _model = VisionEncoderDecoderModel.from_pretrained(MODEL_DIR).to(DEVICE)
+    print("[startup] stage 14: processor OK, loading model onto CPU first...", flush=True)
+    _model = VisionEncoderDecoderModel.from_pretrained(MODEL_DIR)
+    print(f"[startup] stage 15: model loaded on CPU OK, moving to {DEVICE}...", flush=True)
+    _model = _model.to(DEVICE)
+    print("[startup] stage 16: model.to(device) OK, calling .eval()...", flush=True)
     _model.eval()
-    print("[startup] model OK, starting worker.", flush=True)
+    print("[startup] stage 17: ALL STARTUP STAGES PASSED -- starting worker.", flush=True)
 except Exception:
     print("[startup] FAILED -- full traceback below:", flush=True)
     traceback.print_exc(file=sys.stdout)
