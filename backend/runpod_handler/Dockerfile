@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# A too-old pip can crash with an internal resolver AssertionError
+# ("assert len(weights) == expected_node_count") on a large dependency
+# tree -- upgrade it first so that bug doesn't resurface.
+RUN pip install --no-cache-dir --upgrade pip
+
 # torch must come from its own CUDA wheel index, matching the CUDA base
 # image above, or pip will silently resolve a CPU-only build instead.
 RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
