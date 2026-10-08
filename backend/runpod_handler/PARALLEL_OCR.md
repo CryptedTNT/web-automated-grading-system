@@ -17,6 +17,9 @@ process**. The supplied systemd service uses one Uvicorn process. Do not add
 multiple Uvicorn/Gunicorn workers or replicas without a distributed limiter;
 each process would otherwise have its own three-request allowance.
 
+New crops are dispatched when any request completes, without waiting for an
+earlier slow answer. Completed text/confidence results are buffered by crop
+index (up to the submission's crop count); pending requests remain bounded.
 Results are consumed in crop order before the existing positional and
 enumeration grading logic. Local fallback is serialized to avoid model-load
 races. Cancellation stops new dispatch and cancels queued work; up to three

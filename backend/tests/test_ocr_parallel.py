@@ -8,6 +8,38 @@ from app.inference import ocr_parallel as p
 
 
 class ParallelOCRTests(unittest.TestCase):
+    def test_refills_all_three_slots_while_first_answer_is_slow(self):
+        release_first = Event()
+        initial_three = Event()
+        replacements = Event()
+        lock = Lock()
+        started = set()
+
+        def recognize(i):
+            with lock:
+                started.add(i)
+                if {0, 1, 2}.issubset(started):
+                    initial_three.set()
+                if {3, 4}.issubset(started):
+                    replacements.set()
+            if not initial_three.wait(2):
+                raise RuntimeError('Three initial requests did not overlap')
+            if i == 0 and not release_first.wait(3):
+                raise RuntimeError('First answer was not released')
+            return (str(i), i / 10)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            with patch.object(p, '_executor', executor), patch.object(p, 'OCR_CONCURRENCY', 3):
+                with ThreadPoolExecutor(max_workers=1) as caller:
+                    run = caller.submit(lambda: list(p.ordered_recognize(range(8), recognize)))
+                    try:
+                        self.assertTrue(replacements.wait(2),
+                                        'Free slots stayed idle while the first answer was blocked')
+                        self.assertFalse(run.done())
+                    finally:
+                        release_first.set()
+                    self.assertEqual(run.result(timeout=2), [(str(i), i / 10) for i in range(8)])
+
     def test_out_of_order_completion_keeps_input_order(self):
         with ThreadPoolExecutor(max_workers=3) as executor:
             with patch.object(p, "_executor", executor), patch.object(p, "OCR_CONCURRENCY", 3):

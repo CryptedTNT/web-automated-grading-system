@@ -1,6 +1,5 @@
 """Bounded, ordered OCR scheduling shared by sessions in one backend process."""
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import os
 
 # Keep the limit conservative: three RunPod workers, not one pool per teacher.
@@ -9,15 +8,18 @@ _executor = ThreadPoolExecutor(max_workers=OCR_CONCURRENCY, thread_name_prefix="
 
 
 def ordered_recognize(crops, recognize, check_stop=lambda: None, on_result=None):
-    """Yield input-ordered results, with only a small window of pending jobs.
+    """Refill on any completion; buffer results to yield them in crop order.
 
     Cancellation stops new dispatch and cancels queued futures. Already-running
     HTTP requests cannot be recalled; they finish under their configured timeout.
     """
-    pending = deque()
+    pending = {}
+    completed = {}
+    submitted = next_result = 0
     iterator = iter(crops)
 
     def submit_next():
+        nonlocal submitted
         check_stop()
         try:
             crop = next(iterator)
@@ -28,7 +30,8 @@ def ordered_recognize(crops, recognize, check_stop=lambda: None, on_result=None)
             check_stop()
             return recognize(crop)
 
-        pending.append(_executor.submit(run))
+        pending[_executor.submit(run)] = submitted
+        submitted += 1
         return True
 
     try:
@@ -37,21 +40,21 @@ def ordered_recognize(crops, recognize, check_stop=lambda: None, on_result=None)
                 break
         while pending:
             check_stop()
-            future = pending[0]
-            while True:
-                check_stop()
-                try:
-                    result = future.result(timeout=0.1)
-                    break
-                except TimeoutError:
-                    if future.done():
-                        raise
-            pending.popleft()
+            done, _ = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
             check_stop()
-            if on_result:
-                on_result()
-            yield result
-            submit_next()
+            # Resolve the whole completion set before dispatching replacements:
+            # a failure must not trigger additional paid requests.
+            for future in done:
+                completed[pending.pop(future)] = future.result()
+                if on_result:
+                    on_result()
+            for _ in done:
+                if not submit_next():
+                    break
+            while next_result in completed:
+                check_stop()
+                yield completed.pop(next_result)
+                next_result += 1
     finally:
         for future in pending:
             future.cancel()
