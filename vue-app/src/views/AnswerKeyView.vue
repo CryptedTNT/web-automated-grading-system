@@ -8,6 +8,7 @@
    ============================================================ */
 
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import {
   BorderStyle,
   Document,
@@ -66,12 +67,16 @@ let nextUid = 1
    comma-separated string; edited here as an array so the template can
    bind it straight to a group of checkboxes. */
 function parseCorrectLetters(raw) {
-  const letters = String(raw || '')
+  // No default letter: a brand-new question (raw is unset) must start
+  // with nothing ticked, not 'a', since validateQuestionnaire() already
+  // flags an empty correct answer and the checkbox group only ever adds
+  // to this array -- a pre-ticked 'a' would silently stay part of the
+  // key even after the teacher ticks the real answer.
+  return String(raw || '')
     .toLowerCase()
     .split(',')
     .map((s) => s.trim())
     .filter((s) => MC_LETTERS.includes(s))
-  return letters.length ? letters : ['a']
 }
 
 function makeMcItem(item) {
@@ -200,6 +205,12 @@ async function confirmDiscard() {
     'This exam questionnaire has unsaved changes. Discard them and continue?',
   )
 }
+
+/* selectKey()/newKey() above already guard in-page switches (this
+   view's own answer-key sidebar); this guards leaving the page
+   entirely -- clicking Dashboard or another item in the MAIN sidebar
+   used to discard a typed question with no warning at all. */
+onBeforeRouteLeave(async () => confirmDiscard())
 
 async function reload(selectKeyId) {
   keys.value = await API.answerKeys()

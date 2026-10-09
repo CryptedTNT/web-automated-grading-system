@@ -106,8 +106,14 @@ const autoStatus = computed(() =>
 )
 
 function resetItemForm() {
-  action.value = 'override'
-  manualAnswer.value = currentItem.value?.correct_answer || ''
+  // No action pre-selected: a flagged item needs a deliberate teacher
+  // decision, so the form must not be one accidental click away from
+  // applying anything. The manual-answer box, if the teacher does pick
+  // Override, starts from what was actually extracted -- never from the
+  // answer key's own correct answer, which would let an unedited click
+  // silently award full credit regardless of what the student wrote.
+  action.value = ''
+  manualAnswer.value = currentItem.value?.student_answer || ''
   manualScore.value = currentItem.value?.earned ?? 0
   invalid.value = false
   cropMissing.value = false
@@ -186,6 +192,10 @@ async function saveOverride() {
   if (!item) return
 
   notice.value = ''
+  if (!action.value) {
+    await showMessage('Choose an Action', 'Select Accept, Mark as Incorrect, Override, or Award Manual Points before saving.')
+    return
+  }
   // The backend validates awarded points against the question maximum
   // and preserves the original automatic result for every review action.
   let updates
