@@ -40,16 +40,25 @@ const section = ref('All Sections')
    localStorage — `sessions`/`rows` are refs, populated by the loaders
    below and re-populated by watchers when the selected session changes. */
 const sessions = ref([])
+const sessionsLoaded = ref(false)
 async function loadSessions() {
   sessions.value = await API.sessions()
+  sessionsLoaded.value = true
   refreshSessionNumbers(sessions.value)
 }
 
 /* Mirrors the guard at the top of the original refresh(): if the
-   stored session id no longer exists, fall back to the newest one. */
+   stored session id no longer exists, fall back to the newest one.
+   Gated on sessionsLoaded so this never runs against the empty
+   placeholder list this ref starts with before loadSessions() resolves
+   -- without that, arriving here (e.g. from Reports' "View" on an
+   older session) would see an empty `all`, decide the just-set id
+   "doesn't exist", and overwrite it with null/newest before the real
+   list even arrived, always landing on the latest session instead of
+   the one that was clicked. */
 const currentSession = computed(() => {
   const all = sessions.value
-  if (!all.some((s) => s.id === store.currentSessionId)) {
+  if (sessionsLoaded.value && !all.some((s) => s.id === store.currentSessionId)) {
     store.currentSessionId = all[0]?.id || null
   }
   return all.find((s) => s.id === store.currentSessionId) || null
@@ -271,7 +280,7 @@ async function exportSession() {
 function statusClass(status) {
   if (status === 'OK') return 'badge-success'
   if (status === 'Flagged') return 'badge-warning'
-  if (status === 'Wrong' || status === 'Failed') return 'badge-danger'
+  if (status === 'Wrong' || status === 'Failed' || status === 'Error') return 'badge-danger'
   return 'badge-gray'
 }
 

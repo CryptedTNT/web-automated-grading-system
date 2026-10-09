@@ -71,9 +71,17 @@ SELECT
     COALESCE(SUM(gr.status = 'flagged'), 0)         AS flagged_count,
     COALESCE(SUM(gr.status = 'correct'), 0)         AS correct_count,
     COALESCE(SUM(gr.status = 'incorrect'), 0)       AS incorrect_count,
-    -- The app's two-state sheet badge: "Flagged" if anything still needs
-    -- a human, otherwise "OK".
+    -- The app's sheet badge: a sheet the model never actually graded
+    -- (every page errored, so there are no grading_result rows at all)
+    -- must say so, rather than fall through to "OK" just because
+    -- flagged_count is 0 -- that previously showed a failed sheet as
+    -- "0/0, 0%, Status OK" with nothing to tell the teacher it never
+    -- graded in the first place.
     CASE
+        WHEN EXISTS (
+            SELECT 1 FROM exam_sheet_page esp
+            WHERE esp.sheet_id = es.sheet_id AND esp.processing_status = 'error'
+        ) THEN 'Error'
         WHEN COALESCE(SUM(gr.status = 'flagged'), 0) > 0 THEN 'Flagged'
         ELSE 'OK'
     END                                             AS status,
@@ -159,9 +167,13 @@ SELECT
     gs.source_folder                    AS source_folder,
     gs.status                           AS status,
     gs.total_sheets                     AS queued_sheets,
-    COUNT(DISTINCT vsr.sheet_id)        AS graded_sheets,
+    -- A sheet whose every page errored was never actually graded, so it
+    -- must not inflate "how many were graded" or drag down the average
+    -- the way a genuine 0% would -- see v_sheet_result's 'Error' status.
+    COUNT(DISTINCT CASE WHEN vsr.status <> 'Error' THEN vsr.sheet_id END) AS graded_sheets,
+    COUNT(DISTINCT CASE WHEN vsr.status = 'Error' THEN vsr.sheet_id END)  AS failed_sheets,
     COALESCE(SUM(vsr.flagged_count), 0) AS flagged_items,
-    ROUND(AVG(vsr.percentage), 2)       AS average_percentage,
+    ROUND(AVG(CASE WHEN vsr.status <> 'Error' THEN vsr.percentage END), 2) AS average_percentage,
     gs.started_at                       AS started_at,
     gs.finished_at                      AS finished_at
 FROM grading_session gs
@@ -179,9 +191,13 @@ CREATE OR REPLACE VIEW v_dashboard_stats AS
 SELECT
     f.faculty_id                                AS faculty_id,
     COUNT(DISTINCT gs.session_id)               AS sessions,
-    COUNT(DISTINCT vsr.sheet_id)                AS sheets,
+    -- Same reasoning as v_session_summary.graded_sheets/average_percentage:
+    -- a sheet that failed grading entirely must not count as an uploaded,
+    -- scored paper, or it silently drags the average down as if it were a
+    -- real 0%.
+    COUNT(DISTINCT CASE WHEN vsr.status <> 'Error' THEN vsr.sheet_id END) AS sheets,
     COALESCE(SUM(vsr.flagged_count), 0)         AS flagged,
-    COALESCE(ROUND(AVG(vsr.percentage), 2), 0)  AS average
+    COALESCE(ROUND(AVG(CASE WHEN vsr.status <> 'Error' THEN vsr.percentage END), 2), 0) AS average
 FROM faculty f
 LEFT JOIN grading_session gs  ON gs.faculty_id = f.faculty_id
                               AND gs.status <> 'cancelled'

@@ -95,6 +95,7 @@ const rosterStatusText = computed(() => {
   if (status === 'confirmed') return 'Confirmed by you'
   if (status === 'suggested') return 'Close to a student on the list. Confirm whether it is the same student.'
   if (status === 'unmatched') return 'Not on the list. Assign the student or leave it unassigned.'
+  if (!result.value?.roster_id) return 'Not linked to a class list yet. Assign the student below if you have one.'
   return ''
 })
 
@@ -313,7 +314,10 @@ async function saveIdentity() {
       </div>
     </section>
 
-    <section v-if="result.roster_status" class="card roster-check-card" aria-labelledby="roster-check-title">
+    <!-- roster_status is null (not merely 'unmatched') for a sheet graded before the teacher had
+         set up any class list at all -- that must still show the manual-assign control below, not
+         vanish and leave the sheet permanently unlinkable (see roster.py's resolve_identity). -->
+    <section v-if="result.roster_status || !result.roster_id" class="card roster-check-card" aria-labelledby="roster-check-title">
       <div class="card-title" id="roster-check-title">Name Check</div>
       <p class="muted-text">{{ rosterStatusText }}</p>
       <div class="results-summary">
@@ -406,7 +410,11 @@ async function saveIdentity() {
               <td><button type="button" class="btn btn-secondary btn-small" :disabled="savingPoints" @click="openScoring(item)">Set Points</button></td>
             </tr>
             <tr v-if="!items.length">
-              <td colspan="12" class="table-empty">No item-level records are available.</td>
+              <td colspan="12" class="table-empty">
+                {{ result.status === 'Error'
+                  ? 'Grading failed for this submission, so there are no answers to show. Delete it and re-upload the sheet.'
+                  : 'No item-level records are available.' }}
+              </td>
             </tr>
           </tbody>
         </table>

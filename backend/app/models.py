@@ -348,6 +348,7 @@ class VSessionSummary(Base):
     status: Mapped[str]
     queued_sheets: Mapped[int]
     graded_sheets: Mapped[int]
+    failed_sheets: Mapped[int]
     flagged_items: Mapped[int]
     average_percentage: Mapped[decimal.Decimal | None]
     started_at: Mapped[datetime.datetime]

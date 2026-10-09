@@ -82,6 +82,7 @@ def _session_shape(row: VSessionSummary) -> dict:
         "status": SESSION_STATUS_TO_LABEL.get(row.status, row.status),
         "total_sheets": row.queued_sheets,
         "graded_sheets": row.graded_sheets,
+        "failed_sheets": row.failed_sheets,
         "flagged_items": row.flagged_items,
         "average_percentage": float(row.average_percentage) if row.average_percentage is not None else 0,
         "created_at": row.started_at,
@@ -419,7 +420,18 @@ async def _grade_submission(
             page.error_message = str(exc)[:255]
             db.add(page)
         db.commit()
-        return {"sheet_ids": [sheet.sheet_id]}
+        # This sheet produced no StudentInfo/GradingResult rows at all, so
+        # reporting HTTP 200 here (as before) told the frontend the upload
+        # "succeeded" -- the per-group failedCount in processing.js only
+        # increments inside its catch block, which never ran, so a session
+        # where every sheet failed this way was still marked Completed
+        # instead of Failed, and the sheet surfaced in Results as a blank
+        # "Unknown, 0/0, Status OK" row instead of a visible error.
+        logger.error("Grading failed for sheet %s in session %s: %s", sheet_code, session_id, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Grading failed for this submission: {exc}"[:500],
+        ) from exc
 
     if on_progress:
         on_progress(0.97, 'Saving grades')
