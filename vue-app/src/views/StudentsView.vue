@@ -351,7 +351,18 @@ async function importFromExcel(event) {
 
         <p v-if="!sections.length" class="muted-text mt-14">No sections yet. Add the first one above.</p>
         <ul v-else class="section-list">
-          <li v-for="section in pagedSections" :key="section.section_id" :class="{ active: section.section_id === selectedSectionId }">
+          <li
+            v-for="section in pagedSections"
+            :key="section.section_id"
+            :class="{ active: section.section_id === selectedSectionId }"
+            v-bind="editingSectionId === section.section_id ? {} : {
+              role: 'button',
+              tabindex: 0,
+              'aria-current': section.section_id === selectedSectionId,
+              onClick: () => selectSection(section.section_id),
+              onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectSection(section.section_id) } },
+            }"
+          >
             <template v-if="editingSectionId === section.section_id">
               <label class="sr-only" :for="`rename-section-${section.section_id}`">Section name</label>
               <input :id="`rename-section-${section.section_id}`" v-model="editingSectionName" type="text" maxlength="50">
@@ -361,13 +372,13 @@ async function importFromExcel(event) {
               </div>
             </template>
             <template v-else>
-              <button type="button" class="section-select" :aria-current="section.section_id === selectedSectionId" @click="selectSection(section.section_id)">
+              <div class="section-select">
                 <strong>{{ section.name }}</strong>
                 <span class="muted-text">{{ section.student_count }} student(s)</span>
-              </button>
+              </div>
               <div class="flex gap-8 mt-8">
-                <button type="button" class="btn btn-secondary btn-small" @click="startRenameSection(section)">Rename</button>
-                <button type="button" class="btn btn-danger btn-small" @click="removeSection(section)">Delete</button>
+                <button type="button" class="btn btn-secondary btn-small" @click.stop="startRenameSection(section)">Rename</button>
+                <button type="button" class="btn btn-danger btn-small" @click.stop="removeSection(section)">Delete</button>
               </div>
             </template>
           </li>
@@ -512,9 +523,14 @@ async function importFromExcel(event) {
 <style scoped>
 .students-layout { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; align-items: start; }
 .section-list { list-style: none; padding: 0; margin: 0; margin-top: 14px; display: grid; gap: 10px; }
-.section-list li { border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 10px; padding: 10px; }
+/* The whole card is the selection control now (role="button" in the
+   template), not just the name/count text -- clicking anywhere except
+   Rename/Delete (which stop propagation) selects the section. */
+.section-list li { border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 10px; padding: 10px; cursor: pointer; }
+.section-list li:hover { border-color: rgba(128, 128, 128, 0.6); }
+.section-list li:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .section-list li.active { border-color: currentColor; }
-.section-select { width: 100%; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; display: grid; gap: 2px; }
+.section-select { width: 100%; text-align: left; color: inherit; display: grid; gap: 2px; }
 .notice { border-left: 4px solid currentColor; padding: 8px 12px; }
 .records-box { min-width: 320px; max-width: 720px; width: 100%; }
 @media (max-width: 760px) {
