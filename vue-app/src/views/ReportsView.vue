@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
+import { displayGrade, gradeHeader, gradeSuffix } from '@/services/gradingScale.js'
 import { exportStudentsToFile, exportSessionToFile } from '@/services/export.js'
 import { canonicalSection } from '@/services/sections.js'
 import { studentReportRows } from '@/services/studentReports.js'
@@ -11,9 +12,14 @@ import { formatDateTime } from '@/services/datetime.js'
 import { refreshSessionNumbers, sessionTag, sessionLabel } from '@/services/sessionNumbers.js'
 import { useProcessingStore } from '@/stores/processing.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
+import { usePagination } from '@/composables/usePagination.js'
+import PaginationBar from '@/components/PaginationBar.vue'
 
 const router = useRouter()
 const store = useAppStore()
+const shown = (percentage) => displayGrade(percentage, store.gradingScale)
+const suffix = computed(() => gradeSuffix(store.gradingScale))
+const scoreHeader = computed(() => gradeHeader(store.gradingScale))
 const processing = useProcessingStore()
 const sessions = ref([])
 const records = ref([])
@@ -39,6 +45,8 @@ watch(studentMode, () => {
 const loading = ref(true)
 const loadError = ref('')
 const exporting = ref(false)
+const deletingSelected = ref(false)
+const busy = computed(() => exporting.value || deletingSelected.value)
 
 async function load() {
   loading.value = true
@@ -81,6 +89,39 @@ watch(activeRows, (visible) => {
   selectedIds.value = new Set([...selectedIds.value].filter((id) => ids.has(id)))
 })
 const selectedRows = computed(() => activeRows.value.filter((row) => selectedIds.value.has(row.id)))
+
+/* Paging is purely a display slice of the already-filtered activeRows --
+   selection, "select all", and the empty-state message all still read
+   activeRows/selectedIds directly, so a bulk export or delete still acts
+   on every matching row, not just the ones on screen. Each mode keeps
+   its own page/size so switching between Grading Sessions and Student
+   Reports doesn't fight over one page number. */
+const studentPaging = usePagination(students)
+const sessionPaging = usePagination(sessionRows)
+// A new filter is a new question, not just a shorter version of the old
+// list -- land back on page 1 rather than wherever clamping happens to
+// leave the old page number.
+watch([questionnaireId, section, dateFrom, dateTo, sort], () => {
+  studentPaging.reset()
+  sessionPaging.reset()
+})
+/* Printing must include every selected row, not just the current page --
+   browsers only print what's in the DOM. beforeprint/afterprint is the
+   one reliable cross-browser hook for "the print dialog is open now",
+   so pagination is bypassed for just that moment. */
+const printing = ref(false)
+const startPrinting = () => { printing.value = true }
+const stopPrinting = () => { printing.value = false }
+onMounted(() => {
+  window.addEventListener('beforeprint', startPrinting)
+  window.addEventListener('afterprint', stopPrinting)
+})
+onUnmounted(() => {
+  window.removeEventListener('beforeprint', startPrinting)
+  window.removeEventListener('afterprint', stopPrinting)
+})
+const pagedStudents = computed(() => (printing.value ? students.value : studentPaging.pageItems.value))
+const pagedSessions = computed(() => (printing.value ? sessionRows.value : sessionPaging.pageItems.value))
 const allSelected = computed(() => activeRows.value.length > 0 && selectedRows.value.length === activeRows.value.length)
 const partiallySelected = computed(() => selectedRows.value.length > 0 && !allSelected.value)
 function toggleAll() {
@@ -101,6 +142,8 @@ function clearFilters() {
   selectedIds.value = new Set()
   studentSelectedIds.value = new Set()
   sessionSelectedIds.value = new Set()
+  studentPaging.reset()
+  sessionPaging.reset()
 }
 async function exportSelected() {
   if (!selectedRows.value.length || exporting.value) return
@@ -156,6 +199,43 @@ async function deleteSession(session) {
     await load()
   } catch (error) { await showMessage('Could Not Delete Session', error.message || String(error)) }
 }
+
+async function deleteSelected() {
+  if (!selectedRows.value.length || busy.value) return
+  const stillProcessing = selectedRows.value.find((s) => processing.isRunning && processing.sessionId === s.id)
+  if (stillProcessing) {
+    await showMessage('Session Is Processing', 'Cancel grading before deleting that session, then try again.')
+    return
+  }
+  const targets = [...selectedRows.value]
+  const count = targets.length
+  if (!await showConfirm(
+    'Delete Selected Sessions',
+    `Permanently delete ${count} session${count === 1 ? '' : 's'} and ${count === 1 ? 'its' : 'their'} graded sheets, results, and stored images? This cannot be undone.`,
+  )) return
+
+  deletingSelected.value = true
+  const failures = []
+  try {
+    for (const session of targets) {
+      try {
+        await API.clearSession(session.id)
+        if (store.currentSessionId === session.id) {
+          store.currentSessionId = null
+          store.selectedStudentResultId = null
+        }
+      } catch (error) {
+        failures.push(`${sessionLabel(session.id)}: ${error.message || error}`)
+      }
+    }
+    await load()
+    if (failures.length) {
+      await showMessage('Some Sessions Were Not Deleted', `${count - failures.length} of ${count} deleted. ${failures.join(' ')}`)
+    }
+  } finally {
+    deletingSelected.value = false
+  }
+}
 function printReport() { window.print() }
 function statusClass(status) {
   if (status === 'Failed') return 'badge-danger'
@@ -189,7 +269,7 @@ function statusClass(status) {
         </div>
         <div v-if="studentMode" class="report-filter-field">
           <label class="form-label" for="rpt-sort">Sort By</label>
-          <select id="rpt-sort" v-model="sort" :disabled="exporting">
+          <select id="rpt-sort" v-model="sort" :disabled="busy">
             <option value="name-asc">Name: A–Z</option>
             <option value="name-desc">Name: Z–A</option>
             <option value="score-desc">Score: Highest First</option>
@@ -198,34 +278,42 @@ function statusClass(status) {
         </div>
         <div class="report-filter-field">
           <label class="form-label" for="rpt-from">From</label>
-          <input id="rpt-from" v-model="dateFrom" type="date" :disabled="exporting">
+          <input id="rpt-from" v-model="dateFrom" type="date" :disabled="busy">
         </div>
         <div class="report-filter-field">
           <label class="form-label" for="rpt-to">To</label>
-          <input id="rpt-to" v-model="dateTo" type="date" :disabled="exporting">
+          <input id="rpt-to" v-model="dateTo" type="date" :disabled="busy">
         </div>
       </div>
       <div class="action-bar reports-toolbar no-print">
-        <button class="btn btn-secondary" :disabled="exporting" @click="clearFilters">Clear Filters</button>
+        <button class="btn btn-secondary" :disabled="busy" @click="clearFilters">Clear Filters</button>
         <div class="spacer"></div>
         <span v-if="selectedRows.length" class="badge badge-gray">{{ selectedRows.length }} selected</span>
-        <button class="btn btn-success" :disabled="!selectedRows.length || exporting || loading || !!loadError" @click="exportSelected">
+        <button class="btn btn-success" :disabled="!selectedRows.length || busy || loading || !!loadError" @click="exportSelected">
           {{ exporting ? 'Exporting...' : `Export Selected ${studentMode ? 'Students' : 'Sessions'}${selectedRows.length ? ` (${selectedRows.length})` : ''}` }}
         </button>
-        <button class="btn btn-secondary" :disabled="loading || !!loadError || !activeRows.length" @click="printReport">Print{{ selectedRows.length ? ' Selected' : '' }}</button>
+        <button class="btn btn-secondary" :disabled="busy || loading || !!loadError || !activeRows.length" @click="printReport">Print{{ selectedRows.length ? ' Selected' : '' }}</button>
+        <button
+          v-if="!studentMode"
+          class="btn btn-danger"
+          :disabled="!selectedRows.length || busy || loading || !!loadError"
+          @click="deleteSelected"
+        >
+          {{ deletingSelected ? 'Deleting...' : `Delete Selected${selectedRows.length ? ` (${selectedRows.length})` : ''}` }}
+        </button>
       </div>
       <p v-if="loading || loadError" role="status">{{ loadError || 'Loading reports...' }}
         <button v-if="loadError" class="btn btn-secondary btn-small no-print" @click="load">Retry</button>
       </p>
-      <p v-else-if="studentMode" class="page-subtitle" role="status" aria-live="polite">{{ students.length }} student result(s). Latest completed submission per student and questionnaire within the chosen dates. Flagged grades are provisional.</p>
+      <p v-else-if="studentMode" class="page-subtitle" role="status" aria-live="polite">{{ students.length }} student result(s). The latest completed record per student and questionnaire within the chosen dates. Flagged grades are provisional.</p>
       <p v-else class="page-subtitle" role="status" aria-live="polite">{{ sessionRows.length }} grading session(s).</p>
       <div class="table-wrapper reports-table-wrapper">
         <table>
           <thead>
             <tr>
-              <th class="no-print"><input type="checkbox" :aria-label="studentMode ? 'Select all visible students' : 'Select all visible sessions'" :checked="allSelected" :indeterminate="partiallySelected" :disabled="!activeRows.length || exporting" @change="toggleAll"></th>
+              <th class="no-print"><input type="checkbox" :aria-label="studentMode ? 'Select all visible students' : 'Select all visible sessions'" :checked="allSelected" :indeterminate="partiallySelected" :disabled="!activeRows.length || busy" @change="toggleAll"></th>
               <template v-if="studentMode">
-                <th>Student Name</th><th>Section</th><th>Questionnaire</th><th>Score</th><th>% Score</th><th>Flagged</th><th>Status</th><th class="no-print">Action</th>
+                <th>Student Name</th><th>Section</th><th>Questionnaire</th><th>Score</th><th>{{ scoreHeader }}</th><th>Flagged</th><th>Status</th><th class="no-print">Action</th>
               </template>
               <template v-else>
                 <th>Session</th><th>Date</th><th>Questionnaire</th><th>Sheets</th><th>Average</th><th>Flagged</th><th>Status</th><th class="no-print">Action</th>
@@ -234,34 +322,34 @@ function statusClass(status) {
           </thead>
           <tbody>
             <template v-if="studentMode">
-            <tr v-for="student in students" :key="student.id" :class="{ selected: selectedIds.has(student.id), 'print-hide': selectedIds.size > 0 && !selectedIds.has(student.id) }">
-              <td class="no-print"><input type="checkbox" :aria-label="`Select ${student.student_name || 'unnamed student'} — ${student.session.answer_key_name || 'questionnaire'}`" :checked="selectedIds.has(student.id)" :disabled="exporting" @change="toggleStudent(student.id)"></td>
+            <tr v-for="student in pagedStudents" :key="student.id" :class="{ selected: selectedIds.has(student.id), 'print-hide': selectedIds.size > 0 && !selectedIds.has(student.id) }">
+              <td class="no-print"><input type="checkbox" :aria-label="`Select ${student.student_name || 'unnamed student'} — ${student.session.answer_key_name || 'questionnaire'}`" :checked="selectedIds.has(student.id)" :disabled="busy" @change="toggleStudent(student.id)"></td>
               <td>{{ student.student_name || 'Unknown Student' }}</td>
               <td>{{ student.section || 'Not specified' }}</td>
               <td>{{ student.session.answer_key_name || 'No questionnaire' }}</td>
               <td>{{ student.score }} / {{ student.total }}</td>
-              <td>{{ student.percentage }}%</td>
+              <td>{{ shown(student.percentage) }}{{ suffix }}</td>
               <td>{{ student.flagged_count }}</td>
               <td><span class="badge" :class="statusClass(student.status)">{{ student.status }}</span></td>
               <td class="no-print"><button class="btn btn-secondary btn-small" @click="viewStudent(student)">View</button></td>
             </tr>
             </template>
             <template v-else>
-              <tr v-for="session in sessionRows" :key="session.id" :class="{ selected: selectedIds.has(session.id), 'print-hide': selectedIds.size > 0 && !selectedIds.has(session.id) }">
-                <td class="no-print"><input type="checkbox" :aria-label="`Select ${sessionLabel(session.id)}`" :checked="selectedIds.has(session.id)" :disabled="exporting" @change="toggleStudent(session.id)"></td>
+              <tr v-for="session in pagedSessions" :key="session.id" :class="{ selected: selectedIds.has(session.id), 'print-hide': selectedIds.size > 0 && !selectedIds.has(session.id) }">
+                <td class="no-print"><input type="checkbox" :aria-label="`Select ${sessionLabel(session.id)}`" :checked="selectedIds.has(session.id)" :disabled="busy" @change="toggleStudent(session.id)"></td>
                 <td>{{ sessionTag(session.id) }}</td>
                 <td>{{ formatDateTime(session.created_at) }}</td>
                 <td>{{ session.answer_key_name || 'No questionnaire' }}</td>
                 <td>{{ session.sheets }}</td>
-                <td>{{ session.average }}%</td>
+                <td>{{ session.sheets ? shown(session.average) : 0 }}{{ suffix }}</td>
                 <td>{{ session.flagged }}</td>
                 <td><span class="badge" :class="statusClass(session.status)">{{ session.status }}</span></td>
                 <td class="no-print">
                   <div class="action-bar">
                     <button class="btn btn-secondary btn-small" @click="viewSession(session)">View</button>
                     <button class="btn btn-secondary btn-small" @click="viewSession(session, 'exam_analysis')">Analyze</button>
-                    <button class="btn btn-secondary btn-small" :disabled="exporting" @click="downloadSession(session)">Download</button>
-                    <button class="btn btn-danger btn-small" :disabled="exporting" @click="deleteSession(session)">Delete</button>
+                    <button class="btn btn-secondary btn-small" :disabled="busy" @click="downloadSession(session)">Download</button>
+                    <button class="btn btn-danger btn-small" :disabled="busy" @click="deleteSession(session)">Delete</button>
                   </div>
                 </td>
               </tr>
@@ -270,6 +358,28 @@ function statusClass(status) {
           </tbody>
         </table>
       </div>
+      <PaginationBar
+        v-if="studentMode"
+        v-model:page="studentPaging.page.value"
+        v-model:page-size="studentPaging.pageSize.value"
+        :page-count="studentPaging.pageCount.value"
+        :total="studentPaging.total.value"
+        :range-start="studentPaging.rangeStart.value"
+        :range-end="studentPaging.rangeEnd.value"
+        item-label="student result"
+        :disabled="busy || loading"
+      />
+      <PaginationBar
+        v-else
+        v-model:page="sessionPaging.page.value"
+        v-model:page-size="sessionPaging.pageSize.value"
+        :page-count="sessionPaging.pageCount.value"
+        :total="sessionPaging.total.value"
+        :range-start="sessionPaging.rangeStart.value"
+        :range-end="sessionPaging.rangeEnd.value"
+        item-label="session"
+        :disabled="busy || loading"
+      />
     </section>
   </div>
 </template>

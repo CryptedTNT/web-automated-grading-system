@@ -134,14 +134,39 @@ class ExamSheetPage(Base):
     uploaded_at: Mapped[datetime.datetime] = mapped_column(DateTime)
 
 
+class ClassSection(Base):
+    __tablename__ = "class_section"
+
+    section_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    faculty_id: Mapped[int]
+    section_name: Mapped[str] = mapped_column(String(50))
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime)
+
+
+class RosterStudent(Base):
+    __tablename__ = "roster_student"
+
+    roster_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    section_id: Mapped[int]
+    full_name: Mapped[str] = mapped_column(String(150))
+    position: Mapped[int]
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime)
+
+
 class StudentInfo(Base):
     __tablename__ = "student_info"
 
     student_info_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     sheet_id: Mapped[int] = mapped_column(unique=True)
     name: Mapped[str | None] = mapped_column(String(150))
+    detected_name: Mapped[str | None] = mapped_column(String(150))
     name_confidence: Mapped[decimal.Decimal | None] = mapped_column(Numeric(5, 4))
     section: Mapped[str | None] = mapped_column(String(50))
+    section_id: Mapped[int | None]
+    roster_id: Mapped[int | None]
+    roster_status: Mapped[str | None] = mapped_column(String(20))  # matched|suggested|unmatched|confirmed
+    roster_score: Mapped[decimal.Decimal | None] = mapped_column(Numeric(5, 2))
+    duplicate_of_sheet_id: Mapped[int | None]
     exam_date: Mapped[datetime.date | None]
     consent_status: Mapped[str] = mapped_column(String(20))  # consented|not_consented
     participant_code: Mapped[str | None] = mapped_column(String(50))

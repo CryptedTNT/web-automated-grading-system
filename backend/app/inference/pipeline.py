@@ -68,6 +68,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from app.inference import recognizer
 from app.inference.detector import Detection, detect_regions
+from app.inference.strikethrough import has_strikethrough
 from app.inference.grading import (
     GradeVerdict,
     grade_exact,
@@ -79,6 +80,7 @@ from app.inference.grading import (
 
 MODEL_NAME = "YOLOv26n-seg + TrOCR-custom"
 LOW_CONFIDENCE_THRESHOLD = 0.5
+STRIKETHROUGH_REMARK = "Possible strikethrough: this answer looks crossed out. Check the intended answer before accepting its score."
 
 
 CROP_PAD_PX = 6  # room around the outline so ascenders/descenders are not clipped
@@ -195,6 +197,8 @@ def run_sheet_group(
     recognition_total = min(len(all_dets), len(items)) + sum(field in identity_boxes for field in ('name', 'section'))
     recognition_done = 0
 
+    struck_crops: set[str] = set()
+
     # Prefetch remote OCR without touching pairing, enumeration matching, or
     # grading. Object identity keys keep every detection tied to its own crop.
     remote_results = {}
@@ -229,6 +233,8 @@ def run_sheet_group(
         crop_img = _crop(image, det.bbox, det.polygon)
         crop_path = crop_dir / f"{sheet_code}_item{item_id}_{suffix}.png"
         crop_img.save(crop_path)  # saved as-is so the teacher can see any crossed-out writing
+        if has_strikethrough(crop_img):
+            struck_crops.add(str(crop_path))
         # Do not alter handwritten pixels before recognition. The former
         # automatic scribble-removal pass occasionally treated ordinary
         # handwriting as a correction and replaced a readable name with an
@@ -408,6 +414,11 @@ def run_sheet_group(
             image, det = found
             text, _confidence, _crop_path = recognize_and_save(image, det, 0, field_name)
             identity[field_name] = text
+
+    for answer in answers:
+        if answer["crop_path"] in struck_crops:
+            verdict = answer["verdict"]
+            answer["verdict"] = GradeVerdict("flagged", 0.0, verdict.match_score, STRIKETHROUGH_REMARK)
 
     if on_progress:
         on_progress(0.95, 'Recognition and answer matching finished')

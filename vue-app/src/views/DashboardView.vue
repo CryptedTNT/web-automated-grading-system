@@ -7,10 +7,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
+import { displayGrade, gradeSuffix } from '@/services/gradingScale.js'
 import { formatDateTime } from '@/services/datetime.js'
 import { loadAllGradedRecords, groupByStudent } from '@/services/studentDirectory.js'
 
 const store = useAppStore()
+const shown = (percentage) => displayGrade(percentage, store.gradingScale)
+const suffix = computed(() => gradeSuffix(store.gradingScale))
 
 const teacherName = computed(() => store.currentUser?.full_name || 'Teacher')
 
@@ -37,9 +40,7 @@ async function load() {
     sessions.map(async (session) => {
       const results = await API.studentResults(session.id)
       const average = results.length
-        ? Math.round(
-            (results.reduce((sum, r) => sum + (r.percentage || 0), 0) / results.length) * 100,
-          ) / 100
+        ? Math.round((results.reduce((sum, r) => sum + (r.percentage || 0), 0) / results.length) * 100) / 100
         : 0
       const flagged = results.reduce((sum, r) => sum + (r.flagged_count || 0), 0)
       return { ...session, sheets: results.length, average, flagged }
@@ -57,7 +58,7 @@ function badgeClass(status) {
 
 const WORKFLOW_STEPS = [
   { number: '01', title: 'Prepare', detail: 'Create an answer key for the assessment.' },
-  { number: '02', title: 'Collect', detail: 'Upload one or more student submissions.' },
+  { number: '02', title: 'Collect', detail: "Upload each student's answer sheets." },
   { number: '03', title: 'Review', detail: 'Check flagged answers and export results.' },
 ]
 </script>
@@ -111,7 +112,7 @@ const WORKFLOW_STEPS = [
       </article>
       <article class="metric-panel">
         <span class="metric-label">Average score</span>
-        <strong>{{ stats.average }}<em>%</em></strong>
+        <strong>{{ stats.sheets ? shown(stats.average) : 0 }}<em>{{ suffix }}</em></strong>
         <span class="metric-caption">Across saved results</span>
       </article>
       <article class="metric-panel">
@@ -142,7 +143,7 @@ const WORKFLOW_STEPS = [
               <td>{{ formatDateTime(session.created_at) }}</td>
               <td class="session-key">{{ session.answer_key_name || 'No key' }}</td>
               <td>{{ session.sheets }}</td>
-              <td>{{ session.average }}%</td>
+              <td>{{ session.sheets ? shown(session.average) : 0 }}{{ suffix }}</td>
               <td>{{ session.flagged }}</td>
               <td><span class="badge" :class="badgeClass(session.status)">{{ session.status }}</span></td>
             </tr>

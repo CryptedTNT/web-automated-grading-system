@@ -4,12 +4,14 @@ import { readFile } from 'node:fs/promises'
 
 // Run the real browser export service with API/download boundaries stubbed.
 async function loadExportService(API, showMessage) {
+  API.getSettings ??= async () => ({})
   globalThis.sectionExportTest = { API, showMessage }
   const source = (await readFile(new URL('../src/services/export.js', import.meta.url), 'utf8'))
     .replace("import { API } from '@/services/api.js'", 'const { API } = globalThis.sectionExportTest')
     .replace("import { showMessage } from '@/services/dialog.js'", 'const { showMessage } = globalThis.sectionExportTest')
     .replace("'./sectionExport.js'", JSON.stringify(new URL('../src/services/sectionExport.js', import.meta.url).href))
     .replace("'./sections.js'", JSON.stringify(new URL('../src/services/sections.js', import.meta.url).href))
+    .replace("'./gradingScale.js'", JSON.stringify(new URL('../src/services/gradingScale.js', import.meta.url).href))
   return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${Math.random()}`)
 }
 

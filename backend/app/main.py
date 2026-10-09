@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
-from app.routers import answer_keys, auth, dashboard, results, sessions, settings as settings_router
+from app.routers import answer_keys, auth, dashboard, results, rosters, sessions, settings as settings_router
 
 # Swagger/ReDoc/openapi.json are public by default -- viewing them needs
 # no session cookie, only calling the endpoints they describe does. That's
@@ -52,6 +52,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(answer_keys.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(results.router, prefix="/api")
+app.include_router(rosters.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 

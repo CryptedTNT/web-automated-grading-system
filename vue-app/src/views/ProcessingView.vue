@@ -51,11 +51,13 @@ const totalPages = computed(() => groups.value.reduce((sum, group) => sum + grou
 
 const canOpenResults = computed(() => Boolean(job.sessionId || store.currentSessionId))
 
-const startDisabled = computed(
-  () => job.isRunning || (job.status === 'completed' && !groups.value.length),
-)
+/* "New Session" (job.status === 'completed') stays clickable even with an
+   empty queue -- same as "Retry Grading"/"Restart Grading" for the other
+   terminal states -- since start() already shows "Images Required" and
+   points the teacher back to Upload when there is nothing queued. */
+const startDisabled = computed(() => job.isRunning)
 
-const countLabel = computed(() => `${job.completed} / ${job.total || groups.value.length} submissions`)
+const countLabel = computed(() => `${job.completed} / ${job.total || groups.value.length} students`)
 
 const currentLabel = computed(() => {
   if (job.isRunning && job.cancelRequested) return 'Cancelling...'
@@ -63,7 +65,7 @@ const currentLabel = computed(() => {
   if (job.status === 'completed') return `${sessionLabel(job.sessionId)} is ready for review.`
   if (job.status === 'cancelled') return `Cancelled. It did not use a session number -- the next run is still Session #${nextSessionNumber()}.`
   if (job.status === 'error') return job.error || 'Grading failed.'
-  return groups.value.length ? `${groups.value.length} submission(s) ready.` : 'No submissions are queued.'
+  return groups.value.length ? `${groups.value.length} student(s) ready.` : 'No students are queued.'
 })
 
 const emptyLogMessage = computed(
@@ -144,7 +146,7 @@ function openResults() {
         <dl class="job-details">
           <div><dt>Answer key</dt><dd>{{ answerKey?.name || 'Not selected' }}</dd></div>
           <div><dt>Key items</dt><dd>{{ keyItems.length }}</dd></div>
-          <div><dt>Queued submissions</dt><dd>{{ groups.length }}</dd></div>
+          <div><dt>Queued students</dt><dd>{{ groups.length }}</dd></div>
           <div><dt>Queued pages</dt><dd>{{ totalPages }}</dd></div>
           <div>
             <dt>Session</dt>

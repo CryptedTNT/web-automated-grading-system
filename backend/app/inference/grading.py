@@ -53,6 +53,20 @@ def _split_alternatives(alternatives: str | None) -> list[str]:
     return [a.strip() for a in re.split(r"[,;\n]", alternatives) if a.strip()]
 
 
+def _candidate_phrasings(recognized: str | None) -> list[str]:
+    """A single enumeration blank is sometimes answered with more than one
+    acceptable phrasing written together, separated by "/" (for example
+    "Virtual Machines / Cloud Platform" for a blank whose key lists both as
+    accepted terms). Each phrasing is compared on its own, in addition to
+    the text as written, so writing either one -- or both -- credits the
+    slot instead of being graded as one long, non-matching answer."""
+    text = (recognized or "").strip()
+    if "/" not in text:
+        return [text]
+    parts = [p.strip() for p in text.split("/") if p.strip()]
+    return [text, *parts] if parts else [text]
+
+
 def best_item_similarity(item, recognized: str | None) -> float:
     """Best enumeration similarity against an answer and its alternatives.
 
@@ -62,7 +76,8 @@ def best_item_similarity(item, recognized: str | None) -> float:
     primary ``correct_answer`` was compared.
     """
     candidates = [item.correct_answer, *_split_alternatives(getattr(item, "alternative_answers", None))]
-    return max((similarity(recognized, candidate) for candidate in candidates), default=0.0)
+    phrasings = _candidate_phrasings(recognized)
+    return max((similarity(phrasing, candidate) for phrasing in phrasings for candidate in candidates), default=0.0)
 
 
 @dataclass

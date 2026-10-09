@@ -14,6 +14,7 @@ import { batchProgress, progressToken } from '@/services/gradingProgress.js'
 import { useAppStore } from './app.js'
 import { showMessage } from '@/services/dialog.js'
 import { sessionLabel, nextSessionNumber, refreshSessionNumbers } from '@/services/sessionNumbers.js'
+import { formatDuration } from '@/services/duration.js'
 
 /* Not part of state: it holds a promise, and nothing renders it. */
 let runningPromise = null
@@ -63,7 +64,7 @@ export const useProcessingStore = defineStore('processing', {
     startButtonLabel: (state) =>
       ({
         running: state.cancelRequested ? 'Cancelling...' : 'Grading...',
-        completed: 'Completed',
+        completed: 'New Session',
         error: 'Retry Grading',
         cancelled: 'Restart Grading',
       })[state.status] || 'Start Grading',
@@ -157,17 +158,20 @@ export const useProcessingStore = defineStore('processing', {
       let sessionId = null
       const app = useAppStore()
       let failedCount = 0
+      const startedAt = Date.now()
+      const elapsed = () => formatDuration(Date.now() - startedAt)
+      const studentWord = (n) => `student${n === 1 ? '' : 's'}`
 
       try {
         sessionId = await API.createSession(keyId, sourceLabel(groups))
         this.sessionId = sessionId
         app.currentSessionId = sessionId
         await refreshSessionNumbers() // the new run shows the number it gets IF it finishes (see sessionNumbers.js)
-        this.appendLog(`${sessionLabel(sessionId)} created with ${groups.length} student submission(s).`)
+        this.appendLog(`${sessionLabel(sessionId)} created with ${groups.length} student(s).`)
 
         for (let index = 0; index < groups.length; index += 1) {
           if (this.cancelRequested) {
-            this.appendLog(`Cancelled after ${index} of ${groups.length} submission(s).`, 'error')
+            this.appendLog(`Cancelled after ${index} of ${groups.length} student(s).`, 'error')
             break
           }
           const group = groups[index]
@@ -257,7 +261,7 @@ export const useProcessingStore = defineStore('processing', {
           app.currentSessionId = null
           /* The queue is left intact so the run can simply be restarted. */
           this.appendLog(
-            `Run cancelled and discarded. The next completed run is still Session #${nextSessionNumber()}.`,
+            `Grading was cancelled and discarded after a total time of ${elapsed()}. The next completed run is still Session #${nextSessionNumber()}.`,
             'error',
           )
           return null
@@ -270,9 +274,12 @@ export const useProcessingStore = defineStore('processing', {
           await API.updateSessionStatus(sessionId, 'Failed')
           await refreshSessionNumbers()
           this.status = 'error'
-          this.error = 'None of the submissions could be graded, so this run does not count as a session. See the log for why, then retry.'
+          this.error = 'None of the students could be graded, so this run does not count as a session. See the log for why, then retry.'
           this.currentFile = ''
-          this.appendLog(`Run failed: none of the ${groups.length} submission(s) could be graded.`, 'error')
+          this.appendLog(
+            `The grading of ${groups.length} ${studentWord(groups.length)} has failed after a total time of ${elapsed()}: none could be graded.`,
+            'error',
+          )
           return null
         }
 
@@ -287,8 +294,8 @@ export const useProcessingStore = defineStore('processing', {
         app.uploadFiles = []
         this.appendLog(
           failedCount
-            ? `${sessionLabel(sessionId)} completed with ${failedCount} of ${groups.length} submission(s) that failed to upload -- see the log above for which. Open Results to review what graded successfully.`
-            : `${sessionLabel(sessionId)} completed. Open Results to continue.`,
+            ? `The grading of ${groups.length} ${studentWord(groups.length)} has finished, with a total time of ${elapsed()}. ${failedCount} of ${groups.length} ${studentWord(groups.length)} failed to upload -- see the log above for which. Open Results to review what graded successfully.`
+            : `The grading of ${groups.length} ${studentWord(groups.length)} has finished, with a total time of ${elapsed()}. ${sessionLabel(sessionId)} is ready -- open Results to continue.`,
           failedCount ? 'error' : 'success',
         )
         return sessionId

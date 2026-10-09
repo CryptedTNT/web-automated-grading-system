@@ -8,14 +8,29 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
+import { displayGrade, gradeHeader, gradeSuffix } from '@/services/gradingScale.js'
 import { showMessage } from '@/services/dialog.js'
 import { exportSessionToFile } from '@/services/export.js'
 import { formatDateTime } from '@/services/datetime.js'
 import { sessionLabel, sessionTag, refreshSessionNumbers } from '@/services/sessionNumbers.js'
 import { canonicalSection, loadAllGradedRecords, searchRecords } from '@/services/studentDirectory.js'
+import { usePagination } from '@/composables/usePagination.js'
+import PaginationBar from '@/components/PaginationBar.vue'
 
 const router = useRouter()
 const store = useAppStore()
+const shown = (percentage) => displayGrade(percentage, store.gradingScale)
+const suffix = computed(() => gradeSuffix(store.gradingScale))
+const scoreHeader = computed(() => gradeHeader(store.gradingScale))
+const ROSTER_BADGES = {
+  matched: ['Matched', 'badge-success'],
+  confirmed: ['Confirmed', 'badge-success'],
+  suggested: ['Check name', 'badge-warning'],
+  unmatched: ['Not on list', 'badge-danger'],
+}
+function rosterBadge(row) {
+  return ROSTER_BADGES[row.roster_status] || null
+}
 
 const query = ref(store.searchTerm || '')
 const section = ref('All Sections')
@@ -63,11 +78,6 @@ async function loadRows() {
 
 watch(currentSession, loadRows)
 
-async function refresh() {
-  await loadSessions()
-  await loadRows()
-}
-
 const sections = computed(() =>
   [...new Set(rows.value.map((row) => canonicalSection(row.section)).filter(Boolean))].sort(),
 )
@@ -93,7 +103,7 @@ const filteredRows = computed(() => {
       row.status,
       row.score,
       row.total,
-      row.percentage,
+      shown(row.percentage),
       currentSession.value?.answer_key_name,
     ]
       .join(' ')
@@ -143,6 +153,13 @@ const sessionId = computed({
   },
 })
 
+/* Pagination -- a new session, section filter, or search term is a new
+   question, not a shorter version of the old list, so it lands back on
+   page 1 rather than wherever clamping happens to leave the old page. */
+const resultsPaging = usePagination(filteredRows)
+const pagedRows = computed(() => resultsPaging.pageItems.value)
+watch([section, sessionId, query], () => resultsPaging.reset())
+
 /* ---------- Global search ---------- */
 /* A name match should surface every one of that student's past records,
    not just the first session containing one -- a teacher looking up a
@@ -153,6 +170,9 @@ const sessionId = computed({
 const searching = computed(() => query.value.trim().length > 0)
 const crossSessionMatches = ref([])
 const searchLoading = ref(false)
+const matchesPaging = usePagination(crossSessionMatches)
+const pagedMatches = computed(() => matchesPaging.pageItems.value)
+watch(crossSessionMatches, () => matchesPaging.reset())
 
 async function runCrossSessionSearch(value) {
   query.value = String(value || '')
@@ -214,8 +234,37 @@ async function reviewFlagged() {
   router.push({ name: 'review' })
 }
 
+/* One session can hold students from several sections at once (a stack of
+   sheets uploaded together isn't necessarily one class). A single mixed
+   spreadsheet was never what a teacher wants to hand to a section adviser,
+   so this exports one file per section instead of one file for the whole
+   session -- unless the section filter above is already narrowed to one,
+   in which case that's the one file produced, matching what's on screen. */
 async function exportSession() {
-  await exportSessionToFile(store.currentSessionId)
+  const id = store.currentSessionId
+  if (!id) {
+    await showMessage('No Session', 'No grading session to export.')
+    return
+  }
+  if (section.value !== 'All Sections') {
+    await exportSessionToFile(id, { section: section.value })
+    return
+  }
+
+  const groups = [...new Set(rows.value.map((row) => canonicalSection(row.section)))]
+  if (groups.length <= 1) {
+    await exportSessionToFile(id) // only one section (or none) present -- nothing to split
+    return
+  }
+  const files = []
+  for (const group of groups) {
+    const filename = await exportSessionToFile(id, { announce: false, section: group })
+    if (filename) files.push(filename)
+  }
+  await showMessage(
+    'Session Exported',
+    `${files.length} separate file(s) downloaded, one per section. Allow multiple downloads if your browser asks.`,
+  )
 }
 
 /* ---------- Display helpers ---------- */
@@ -265,7 +314,6 @@ function toNumber(value) {
       </select>
 
       <div class="spacer"></div>
-      <button v-if="!searching" class="btn btn-secondary" @click="refresh">Refresh</button>
       <button v-if="!searching" class="btn btn-success" @click="exportSession">Export Session</button>
     </div>
 
@@ -282,12 +330,12 @@ function toNumber(value) {
           <thead>
             <tr>
               <th>Session</th><th>Date</th><th>Answer Key</th><th>Student Name</th>
-              <th>Section</th><th>Score</th><th>% Score</th><th>Status</th>
+              <th>Section</th><th>Score</th><th>{{ scoreHeader }}</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="match in crossSessionMatches"
+              v-for="match in pagedMatches"
               :key="match.id"
               tabindex="0"
               @click="openMatch(match)"
@@ -299,7 +347,7 @@ function toNumber(value) {
               <td>{{ match.student_name || 'Unknown' }}</td>
               <td>{{ canonicalSection(match.section) }}</td>
               <td>{{ toNumber(match.score) }} / {{ toNumber(match.total) }}</td>
-              <td>{{ toNumber(match.percentage) }}%</td>
+              <td>{{ shown(match.percentage) }}{{ suffix }}</td>
               <td>
                 <span class="badge" :class="statusClass(match.status)">
                   {{ match.status || 'Unknown' }}
@@ -312,6 +360,16 @@ function toNumber(value) {
           </tbody>
         </table>
       </div>
+      <PaginationBar
+        v-model:page="matchesPaging.page.value"
+        v-model:page-size="matchesPaging.pageSize.value"
+        :page-count="matchesPaging.pageCount.value"
+        :total="matchesPaging.total.value"
+        :range-start="matchesPaging.rangeStart.value"
+        :range-end="matchesPaging.rangeEnd.value"
+        item-label="matching record"
+        :disabled="searchLoading"
+      />
     </section>
 
     <section v-else class="card">
@@ -325,13 +383,13 @@ function toNumber(value) {
         <table>
           <thead>
             <tr>
-              <th>#</th><th>Student Name</th><th>Section</th><th>Score</th>
-              <th>% Score</th><th>Flagged</th><th>Status</th>
+              <th>#</th><th>Student Name</th><th>Section</th><th>Name Check</th><th>Duplicate</th><th>Score</th>
+              <th>{{ scoreHeader }}</th><th>Flagged</th><th>Status</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="(row, index) in filteredRows"
+              v-for="(row, index) in pagedRows"
               :key="row.id"
               tabindex="0"
               :class="{ selected: row.id === selectedId }"
@@ -339,11 +397,25 @@ function toNumber(value) {
               @dblclick="openRow(row.id)"
               @keydown.enter="openRow(row.id)"
             >
-              <td>{{ index + 1 }}</td>
+              <td>{{ resultsPaging.rangeStart.value + index }}</td>
               <td>{{ row.student_name || 'Unknown' }}</td>
               <td>{{ canonicalSection(row.section) }}</td>
+              <td>
+                <span v-if="rosterBadge(row)" class="badge" :class="rosterBadge(row)[1]">{{ rosterBadge(row)[0] }}</span>
+                <span v-else class="muted-text">-</span>
+              </td>
+              <td>
+                <span
+                  v-if="row.duplicate_of_sheet_id"
+                  class="badge badge-warning"
+                  :title="`Already has a graded record for this questionnaire in ${sessionLabel(row.duplicate_of_session_id)}.`"
+                >
+                  Possible Duplicate
+                </span>
+                <span v-else class="muted-text">-</span>
+              </td>
               <td>{{ toNumber(row.score) }} / {{ toNumber(row.total) }}</td>
-              <td>{{ toNumber(row.percentage) }}%</td>
+              <td>{{ shown(row.percentage) }}{{ suffix }}</td>
               <td>{{ toNumber(row.flagged_count) }}</td>
               <td>
                 <span class="badge" :class="statusClass(row.status)">
@@ -352,11 +424,20 @@ function toNumber(value) {
               </td>
             </tr>
             <tr v-if="!filteredRows.length">
-              <td colspan="7" class="table-empty">{{ emptyMessage }}</td>
+              <td colspan="9" class="table-empty">{{ emptyMessage }}</td>
             </tr>
           </tbody>
         </table>
       </div>
+      <PaginationBar
+        v-model:page="resultsPaging.page.value"
+        v-model:page-size="resultsPaging.pageSize.value"
+        :page-count="resultsPaging.pageCount.value"
+        :total="resultsPaging.total.value"
+        :range-start="resultsPaging.rangeStart.value"
+        :range-end="resultsPaging.rangeEnd.value"
+        item-label="student record"
+      />
 
       <div class="workflow-actions results-actions">
         <button class="btn btn-secondary" @click="reviewFlagged">Review Flagged</button>

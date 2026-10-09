@@ -66,10 +66,24 @@ function alternativesFor(item) {
     .filter(Boolean)
 }
 
+/* A single enumeration blank is sometimes answered with more than one
+   acceptable phrasing written together, separated by "/" (for example
+   "Virtual Machines / Cloud Platform" for a blank whose key lists both as
+   accepted terms). Each phrasing is compared on its own, in addition to
+   the text as written, so writing either one -- or both -- credits the
+   slot instead of being graded as one long, non-matching answer. Keep in
+   sync with _candidate_phrasings() in backend/app/inference/grading.py. */
+function candidatePhrasings(text) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed.includes('/')) return [trimmed]
+  const parts = trimmed.split('/').map((p) => p.trim()).filter(Boolean)
+  return parts.length ? [trimmed, ...parts] : [trimmed]
+}
+
 function bestItemSimilarity(item, text) {
-  return Math.max(
-    ...[item.correct_answer, ...alternativesFor(item)].map((candidate) => similarity(candidate, text)),
-  )
+  const candidates = [item.correct_answer, ...alternativesFor(item)]
+  const phrasings = candidatePhrasings(text)
+  return Math.max(...phrasings.flatMap((phrasing) => candidates.map((candidate) => similarity(candidate, phrasing))))
 }
 
 /**

@@ -9,6 +9,7 @@
 
 import { defineStore } from 'pinia'
 import { API } from '@/services/api.js'
+import { normalizeGradingScale } from '@/services/gradingScale.js'
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -25,6 +26,7 @@ export const useAppStore = defineStore('app', {
        student_info.consent_status actually records per upload, so it
        resets with every new queue rather than persisting silently. */
     consentConfirmed: false,
+    gradingScale: 'percentage',
     currentSessionId: null,
     selectedStudentResultId: null,
     selectedFlaggedItemId: null,
@@ -58,9 +60,21 @@ export const useAppStore = defineStore('app', {
       this.selectedAnswerKeyId = keys.length ? keys[0].id : null
     },
 
+    async loadGradingScale() {
+      try {
+        const settings = await API.getSettings()
+        this.gradingScale = normalizeGradingScale(settings.grading_scale)
+      } catch {
+        this.gradingScale = 'percentage'
+      }
+    },
+
     async signIn(user) {
       this.currentUser = user
-      if (user.email_verified) await this.clearRuntimeSelection()
+      if (user.email_verified) {
+        await this.clearRuntimeSelection()
+        await this.loadGradingScale()
+      }
       else {
         this.uploadFiles = []
         this.consentConfirmed = false

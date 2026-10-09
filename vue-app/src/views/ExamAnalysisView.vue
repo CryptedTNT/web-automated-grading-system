@@ -13,6 +13,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { API } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
+import { displayGrade, gradeSuffix } from '@/services/gradingScale.js'
 import { formatDateTime } from '@/services/datetime.js'
 import { sessionTag, sessionLabel, refreshSessionNumbers } from '@/services/sessionNumbers.js'
 
@@ -88,6 +89,9 @@ onMounted(async () => {
   await loadSessionData()
 })
 
+const shown = (percentage) => displayGrade(percentage, store.gradingScale)
+const suffix = computed(() => gradeSuffix(store.gradingScale))
+
 const average = computed(() => {
   if (!results.value.length) return 0
   const sum = results.value.reduce((total, r) => total + toNumber(r.percentage), 0)
@@ -109,8 +113,8 @@ const SCORE_BUCKETS = [
 const distribution = computed(() => {
   const total = results.value.length
   return SCORE_BUCKETS.map((bucket) => {
-    const count = results.value.filter((r) => bucket.test(toNumber(r.percentage))).length
-    return { label: bucket.label, count, pct: total ? Math.round((count / total) * 100) : 0 }
+    const count = results.value.filter((r) => bucket.test(shown(toNumber(r.percentage)))).length
+    return { label: bucket.label.replace('%', suffix.value), count, pct: total ? Math.round((count / total) * 100) : 0 }
   })
 })
 
@@ -149,7 +153,7 @@ const mostMissed = computed(() => itemStats.value.filter((entry) => entry.missed
         </div>
         <div class="stat-card">
           <div class="stat-label">Average Score</div>
-          <div class="stat-value">{{ average }}%</div>
+          <div class="stat-value">{{ results.length ? shown(average) : 0 }}{{ suffix }}</div>
           <div class="stat-delta">{{ selectedSession.answer_key_name || 'No key' }}</div>
         </div>
         <div class="stat-card">

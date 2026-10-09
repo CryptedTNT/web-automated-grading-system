@@ -7,7 +7,7 @@
    preview/print a sheet styled after the paper exam template.
    ============================================================ */
 
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import {
   BorderStyle,
   Document,
@@ -30,6 +30,8 @@ import {
   questionnaireHtml,
   paginatePreview,
 } from '@/services/questionnaireTemplate.js'
+import { usePagination } from '@/composables/usePagination.js'
+import PaginationBar from '@/components/PaginationBar.vue'
 
 const Q_TYPES = ['Multiple Choice', 'True or False', 'Identification', 'Enumeration']
 const MC_LETTERS = ['a', 'b', 'c', 'd']
@@ -113,6 +115,7 @@ function makeEnumBlank(item) {
   return {
     uid: nextUid++,
     correct: v.correct_answer ?? '',
+    alternatives: v.alternatives ?? '',
     points: v.points ?? 1,
     threshold: v.fuzzy_threshold ?? 85,
   }
@@ -555,7 +558,7 @@ function collectItems() {
             question_text: q,
             choices: null,
             correct_answer: String(b.correct).trim(),
-            alternatives: '',
+            alternatives: String(b.alternatives || '').trim(),
             points: boundedQuestionPoints(b.points),
             fuzzy_threshold: clampedInt(b.threshold),
           })
@@ -641,6 +644,15 @@ async function deleteAnswerKey() {
 }
 
 const hasKeys = computed(() => keys.value.length > 0)
+const keysPaging = usePagination(keys)
+const pagedKeys = computed(() => keysPaging.pageItems.value)
+// Keep whichever questionnaire is open in view, even if it isn't on the
+// page the sidebar happens to be showing -- after saving a new one, or
+// clicking one from a search elsewhere, it should not seem to vanish.
+watch(currentKeyId, (id) => {
+  const index = keys.value.findIndex((key) => key.id === id)
+  if (index >= 0) keysPaging.goToPage(Math.floor(index / keysPaging.pageSize.value) + 1)
+})
 
 /* --------------------------------------------------------
    Preview / Print — a standalone printable document styled
@@ -931,7 +943,7 @@ onMounted(reload)
 
         <div class="list-widget">
           <div
-            v-for="key in keys"
+            v-for="key in pagedKeys"
             :key="key.id"
             class="list-item"
             :class="{ active: key.id === currentKeyId }"
@@ -941,6 +953,15 @@ onMounted(reload)
           </div>
           <div v-if="!hasKeys" class="list-item muted-text">No exam questionnaires yet.</div>
         </div>
+        <PaginationBar
+          v-model:page="keysPaging.page.value"
+          v-model:page-size="keysPaging.pageSize.value"
+          :page-count="keysPaging.pageCount.value"
+          :total="keysPaging.total.value"
+          :range-start="keysPaging.rangeStart.value"
+          :range-end="keysPaging.rangeEnd.value"
+          item-label="questionnaire"
+        />
 
         <button
           class="btn btn-danger w-full mt-8"
@@ -1141,6 +1162,7 @@ onMounted(reload)
               </div>
               <div v-for="blank in group.blanks" :key="blank.uid" class="enum-blank-row">
                 <input v-model="blank.correct" type="text" placeholder="Accepted answer" title="Accepted answer" :data-validation-key="fieldKey(section, group, `blank-${blank.uid}`)" :class="{ invalid: isInvalid(fieldKey(section, group, `blank-${blank.uid}`)) }" :aria-invalid="isInvalid(fieldKey(section, group, `blank-${blank.uid}`))" @input="clearInvalid(fieldKey(section, group, `blank-${blank.uid}`))">
+                <input v-model="blank.alternatives" type="text" placeholder="Alternative answers (comma-separated)" title="Other accepted phrasings for this blank, separated by commas">
                 <label>Points <input v-model.number="blank.points" type="number" min="1" max="10" step="1" style="width:60px;" title="Whole-number points per question: 1–10" @input="limitPoints(blank)" @blur="clampPoints(blank)"></label>
                 <label>Threshold % <input v-model.number="blank.threshold" type="number" min="0" max="100" style="width:70px;" title="Fuzzy match threshold %" @input="limitThreshold(blank)" @blur="clampThreshold(blank)"></label>
                 <button

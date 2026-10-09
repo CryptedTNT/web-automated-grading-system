@@ -16,6 +16,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { API } from '@/services/api.js'
+import { GRADING_SCALES, parseGradingScale, formatGradingScale } from '@/services/gradingScale.js'
 // Theme is a device display preference, not account data, and
 // loadSavedTheme() in main.js runs before login exists -- so it (and
 // this tab's saved-theme readout) deliberately stay on localStorage
@@ -37,6 +38,7 @@ const TABS = [
   { id: 'set-account', label: 'Account' },
   { id: 'set-template', label: 'Exam Template' },
   { id: 'set-export', label: 'Export Preferences' },
+  { id: 'set-grading', label: 'Grading Computation' },
   { id: 'set-theme', label: 'Application Theme' },
   { id: 'set-about', label: 'About' },
 ]
@@ -220,6 +222,39 @@ const PREF_TOGGLES = [
   { field: 'include_flagged_notes', label: 'Flagged counts, status, and notes' },
   { field: 'include_question_type', label: 'Question type' },
 ]
+
+const gradingScale = ref('percentage') // the radio group's value: 'percentage' | 'base50' | 'custom'
+const customBase = ref(60) // only meaningful when gradingScale === 'custom'
+const customBaseInvalid = computed(() => {
+  const n = Number(customBase.value)
+  return gradingScale.value === 'custom' && (!Number.isFinite(n) || n < 0 || n > 99)
+})
+const gradingScaleLabel = computed(() => {
+  if (gradingScale.value === 'custom') return `Manual Base (${customBase.value})`
+  return GRADING_SCALES.find((scale) => scale.value === gradingScale.value)?.label || ''
+})
+
+onMounted(async () => {
+  try {
+    const settings = await API.getSettings()
+    const { mode, base } = parseGradingScale(settings.grading_scale)
+    gradingScale.value = mode
+    if (mode === 'custom') customBase.value = base
+  } catch {
+    gradingScale.value = 'percentage'
+  }
+})
+
+async function saveGradingScale() {
+  if (customBaseInvalid.value) {
+    await showMessage('Invalid Base Score', 'Enter a base score from 0 to 99.')
+    return
+  }
+  const value = formatGradingScale(gradingScale.value, customBase.value)
+  await API.setSetting('grading_scale', value)
+  store.gradingScale = value
+  await showMessage('Grading Computation Saved', `Grades are now computed as ${gradingScaleLabel.value}. Every page, report, and export shows the same value.`)
+}
 
 async function saveExportPreferences() {
   filenameInvalid.value = false
@@ -660,6 +695,50 @@ function selectTheme(key) {
       </fieldset>
       <div class="settings-actions">
         <button class="btn btn-primary" @click="saveExportPreferences">Save Preferences</button>
+      </div>
+    </section>
+
+    <!-- Grading computation -->
+    <section
+      class="tab-content settings-panel"
+      :class="{ active: activeTab === 'set-grading' }"
+      role="tabpanel"
+    >
+      <div class="card-title">Grading Computation</div>
+      <fieldset class="preference-group">
+        <legend>How scores are reported</legend>
+        <label v-for="scale in GRADING_SCALES" :key="scale.value" class="checkbox-row">
+          <input v-model="gradingScale" type="radio" name="grading-scale" :value="scale.value">
+          <span><strong>{{ scale.label }}</strong> — {{ scale.detail }}</span>
+        </label>
+        <label class="checkbox-row">
+          <input v-model="gradingScale" type="radio" name="grading-scale" value="custom">
+          <span>
+            <strong>Manual Base Score</strong> — (Score ÷ total points) × (100 − base) + base. Set your own base
+            instead of the fixed 50 above; a score of zero becomes that base and a perfect score is still 100.
+          </span>
+        </label>
+        <div v-if="gradingScale === 'custom'" class="flex gap-8 items-center mt-8" style="margin-left: 26px;">
+          <label for="custom-base">Base score</label>
+          <input
+            id="custom-base"
+            v-model.number="customBase"
+            type="number"
+            min="0"
+            max="99"
+            step="1"
+            style="width: 80px;"
+            :aria-invalid="customBaseInvalid"
+          >
+          <span class="muted-text">A score of zero becomes {{ customBase }}; a perfect score is always 100.</span>
+        </div>
+      </fieldset>
+      <div class="muted-text mt-8">
+        The stored score is always the points earned out of the total points. This setting only changes how that
+        result is displayed and exported. Averages and charts follow the same setting.
+      </div>
+      <div class="settings-actions">
+        <button class="btn btn-primary" @click="saveGradingScale">Save Grading Computation</button>
       </div>
     </section>
 

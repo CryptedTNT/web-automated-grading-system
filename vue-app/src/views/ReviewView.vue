@@ -25,6 +25,8 @@ import { sessionTag, sessionLabel, refreshSessionNumbers } from '@/services/sess
 import { formatDateTime } from '@/services/datetime.js'
 import { canonicalSection } from '@/services/studentDirectory.js'
 import { validManualScore } from '@/services/manualScoring.js'
+import { usePagination } from '@/composables/usePagination.js'
+import PaginationBar from '@/components/PaginationBar.vue'
 
 const router = useRouter()
 const store = useAppStore()
@@ -66,6 +68,9 @@ const flaggedStudents = computed(() =>
     .filter((r) => toNumber(r.flagged_count) > 0)
     .sort((a, b) => toNumber(b.flagged_count) - toNumber(a.flagged_count)),
 )
+const flaggedStudentsPaging = usePagination(flaggedStudents)
+const pagedFlaggedStudents = computed(() => flaggedStudentsPaging.pageItems.value)
+watch(sessionId, () => flaggedStudentsPaging.reset())
 
 /* ---------- Per-student review ---------- */
 /* null = showing the student list; set = actively reviewing that
@@ -261,7 +266,7 @@ function openFullResult() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="student in flaggedStudents" :key="student.id">
+            <tr v-for="student in pagedFlaggedStudents" :key="student.id">
               <td>{{ student.student_name || 'Unknown' }}</td>
               <td>{{ canonicalSection(student.section) }}</td>
               <td>{{ toNumber(student.flagged_count) }}</td>
@@ -279,6 +284,15 @@ function openFullResult() {
           </tbody>
         </table>
       </div>
+      <PaginationBar
+        v-model:page="flaggedStudentsPaging.page.value"
+        v-model:page-size="flaggedStudentsPaging.pageSize.value"
+        :page-count="flaggedStudentsPaging.pageCount.value"
+        :total="flaggedStudentsPaging.total.value"
+        :range-start="flaggedStudentsPaging.rangeStart.value"
+        :range-end="flaggedStudentsPaging.rangeEnd.value"
+        item-label="student"
+      />
       <div class="workflow-actions">
         <button class="btn btn-secondary" @click="router.push({ name: 'results' })">Back to Results</button>
       </div>

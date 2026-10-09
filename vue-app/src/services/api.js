@@ -96,6 +96,24 @@ const patch = (path, body) => request('PATCH', path, body ?? {})
 const put = (path, body) => request('PUT', path, body ?? {})
 const del = (path) => request('DELETE', path)
 
+async function uploadFile(path, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await safeFetch(BASE + path, { method: 'POST', credentials: 'include', body: formData })
+  let data = null
+  try {
+    data = await res.json()
+  } catch {
+    data = null
+  }
+  if (!res.ok) {
+    if (handleIfSessionExpired(res, path)) return new Promise(() => {})
+    const message = (data && data.detail) || `Upload failed (${res.status})`
+    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+  }
+  return data
+}
+
 /* ---------- Password rules (identical to database.js — pure client-side
    validation, no storage involved, so nothing about a backend changes it) --------- */
 const PASSWORD_RULES = [
@@ -311,6 +329,9 @@ export const API = {
       return null
     }
   },
+  async deleteSheet(sheetId) {
+    await del(`/sheets/${sheetId}`)
+  },
   async updateStudentResult() {
     // The database version patches score/total/etc. directly. The
     // backend never stores those columns — v_sheet_result derives them
@@ -353,6 +374,44 @@ export const API = {
   /* ---------- Dashboard ---------- */
   async dashboardStats() {
     return get('/dashboard')
+  },
+
+  /* ---------- Class sections and rosters ---------- */
+  async listSections() {
+    return get('/sections')
+  },
+  async createSection(name) {
+    return post('/sections', { name })
+  },
+  async renameSection(sectionId, name) {
+    return patch(`/sections/${sectionId}`, { name })
+  },
+  async deleteSection(sectionId) {
+    await del(`/sections/${sectionId}`)
+  },
+  async listSectionStudents(sectionId) {
+    return get(`/sections/${sectionId}/students`)
+  },
+  async addSectionStudent(sectionId, fullName) {
+    return post(`/sections/${sectionId}/students`, { full_name: fullName })
+  },
+  async renameSectionStudent(rosterId, fullName) {
+    return patch(`/students/${rosterId}`, { full_name: fullName })
+  },
+  async deleteSectionStudent(rosterId) {
+    await del(`/students/${rosterId}`)
+  },
+  async importStudentsFromImage(sectionId, file) {
+    return uploadFile(`/sections/${sectionId}/students/import-image`, file)
+  },
+  async importStudentsFromExcel(sectionId, file) {
+    return uploadFile(`/sections/${sectionId}/students/import-excel`, file)
+  },
+  async setSheetRoster(sheetId, rosterId) {
+    return patch(`/sheets/${sheetId}/roster`, { roster_id: rosterId })
+  },
+  async rosterStudentResults(rosterId) {
+    return get(`/students/${rosterId}/results`)
   },
 
   /* ---------- Settings ---------- */

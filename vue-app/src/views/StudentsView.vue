@@ -1,152 +1,331 @@
 <script setup>
 /* ============================================================
-   StudentsView.vue — every graded student and every answer key,
-   rolled up across all sessions.
+   StudentsView.vue -- the class lists the teacher handles.
 
-   There is no persistent student identity in this system (a "student"
-   is only the OCR-recognized name on a sheet), so "all records of a
-   student" means "every graded result whose recognized name matches" --
-   the same assumption the Results page's cross-session search already
-   makes. This page is a permanent, browsable index of that, rather than
-   something only reachable by typing a search term first.
+   A section (for example BSCS 1-A) holds its students in the order the
+   teacher gave them. Students are added one at a time, read from a photo
+   of a list (order kept top to bottom), or imported from an Excel file
+   (the names column is identified automatically). After grading, each
+   sheet's section and name are checked against these lists on the
+   Results and Student Result pages.
    ============================================================ */
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAppStore } from '@/stores/app.js'
 import { API } from '@/services/api.js'
+import { useAppStore } from '@/stores/app.js'
+import { showMessage, showConfirm } from '@/services/dialog.js'
+import { usePagination } from '@/composables/usePagination.js'
+import PaginationBar from '@/components/PaginationBar.vue'
 import { formatDateTime } from '@/services/datetime.js'
-import { sessionTag, refreshSessionNumbers } from '@/services/sessionNumbers.js'
-import {
-  canonicalSection,
-  loadAllGradedRecords,
-  groupByStudent,
-  groupByAnswerKey,
-  needsAttention,
-} from '@/services/studentDirectory.js'
+import { displayGrade, gradeHeader, gradeSuffix } from '@/services/gradingScale.js'
+import { exportSectionReportToFile } from '@/services/export.js'
 
 const router = useRouter()
 const store = useAppStore()
 
+const sections = ref([])
+const selectedSectionId = ref(null)
+const students = ref([])
 const loading = ref(true)
-const records = ref([])
-const query = ref('')
-const selectedStudentKey = ref(null)
-const selectedSection = ref('All Sections')
-const studentSort = ref('name')
 
-async function load() {
-  loading.value = true
+const newSectionName = ref('')
+const newStudentName = ref('')
+const editingSectionId = ref(null)
+const editingSectionName = ref('')
+const editingStudentId = ref(null)
+const editingStudentName = ref('')
+
+const busy = ref(false)
+const importing = ref('')
+const notice = ref('')
+const imageInput = ref(null)
+const excelInput = ref(null)
+const exportingReport = ref(false)
+
+const selectedSection = computed(() => sections.value.find((s) => s.section_id === selectedSectionId.value) || null)
+
+const sectionsPaging = usePagination(sections)
+const pagedSections = computed(() => sectionsPaging.pageItems.value)
+// Jump the sidebar to wherever the selected section actually is -- creating
+// or picking one should never make it seem to disappear onto another page.
+watch(selectedSectionId, (id) => {
+  const index = sections.value.findIndex((section) => section.section_id === id)
+  if (index >= 0) sectionsPaging.goToPage(Math.floor(index / sectionsPaging.pageSize.value) + 1)
+})
+
+const studentsPaging = usePagination(students)
+const pagedStudents = computed(() => studentsPaging.pageItems.value)
+watch(selectedSectionId, () => studentsPaging.reset())
+
+async function loadSections() {
+  sections.value = await API.listSections()
+  if (!sections.value.some((s) => s.section_id === selectedSectionId.value)) {
+    selectedSectionId.value = sections.value[0]?.section_id ?? null
+  }
+}
+
+async function loadStudents() {
+  students.value = selectedSectionId.value ? await API.listSectionStudents(selectedSectionId.value) : []
+}
+
+async function refresh() {
+  await loadSections()
+  await loadStudents()
+}
+
+onMounted(async () => {
   try {
-    const sessions = await API.sessions()
-    refreshSessionNumbers(sessions)
-    records.value = await loadAllGradedRecords()
+    await refresh()
   } finally {
     loading.value = false
   }
-}
-onMounted(load)
-
-const students = computed(() => groupByStudent(records.value))
-const answerKeys = computed(() => groupByAnswerKey(records.value))
-const sections = computed(() =>
-  [...new Set(students.value.map((student) => student.section).filter(Boolean))].sort(),
-)
-
-const filteredStudents = computed(() => {
-  const needle = query.value.trim().toLowerCase()
-  const list = students.value.filter((student) => {
-    if (selectedSection.value !== 'All Sections' && student.section !== selectedSection.value) return false
-    return !needle ||
-      student.name.toLowerCase().includes(needle) ||
-      student.section.toLowerCase().includes(needle)
-  })
-  return list.sort((left, right) => {
-    if (studentSort.value === 'section') {
-      return left.section.localeCompare(right.section) || left.name.localeCompare(right.name)
-    }
-    if (studentSort.value === 'attention') {
-      return left.average - right.average || left.name.localeCompare(right.name)
-    }
-    return left.name.localeCompare(right.name) || left.section.localeCompare(right.section)
-  })
 })
 
-const attentionCount = computed(() => students.value.filter(needsAttention).length)
-
-const selectedStudent = computed(
-  () => students.value.find((student) => student.key === selectedStudentKey.value) || null,
-)
-
-function selectStudent(student) {
-  selectedStudentKey.value = student.key
+async function selectSection(sectionId) {
+  selectedSectionId.value = sectionId
+  notice.value = ''
+  editingStudentId.value = null
+  await loadStudents()
 }
 
-function toNumber(value) {
-  return Number.isFinite(Number(value)) ? Number(value) : 0
+async function fail(title, error) {
+  await showMessage(title, error?.message || 'Something went wrong. Please try again.')
 }
 
-/* Oldest-first, for reading left-to-right as "over time" -- the detail
-   table itself stays newest-first (see groupByStudent), so this is a
-   separate view over the same records rather than re-sorting the table. */
-const trendPoints = computed(() => {
-  if (!selectedStudent.value) return []
-  return [...selectedStudent.value.records].sort(
-    (a, b) => new Date(a.session.created_at) - new Date(b.session.created_at),
+async function createSection() {
+  const name = newSectionName.value.trim()
+  if (!name || busy.value) return
+  busy.value = true
+  try {
+    const created = await API.createSection(name)
+    newSectionName.value = ''
+    await loadSections()
+    await selectSection(created.section_id)
+  } catch (error) {
+    await fail('Section Not Added', error)
+  } finally {
+    busy.value = false
+  }
+}
+
+function startRenameSection(section) {
+  editingSectionId.value = section.section_id
+  editingSectionName.value = section.name
+}
+
+async function saveRenameSection(section) {
+  const name = editingSectionName.value.trim()
+  if (!name) return
+  try {
+    await API.renameSection(section.section_id, name)
+    editingSectionId.value = null
+    await loadSections()
+    await loadStudents()
+  } catch (error) {
+    await fail('Section Not Renamed', error)
+  }
+}
+
+async function removeSection(section) {
+  const ok = await showConfirm(
+    'Delete Section?',
+    `Delete ${section.name} and its ${section.student_count} student(s)? Graded sheets keep their recorded names but are no longer checked against this list.`,
   )
-})
+  if (!ok) return
+  try {
+    await API.deleteSection(section.section_id)
+    await loadSections()
+    await loadStudents()
+  } catch (error) {
+    await fail('Section Not Deleted', error)
+  }
+}
 
-// A flat "Steady" reading up to +/-5 points keeps ordinary score noise
-// (one harder exam, one lucky guess) from being reported as a trend.
-const TREND_FLAT_BAND = 5
+async function addStudent() {
+  const name = newStudentName.value.trim()
+  if (!name || !selectedSectionId.value || busy.value) return
+  busy.value = true
+  try {
+    await API.addSectionStudent(selectedSectionId.value, name)
+    newStudentName.value = ''
+    await loadStudents()
+    await loadSections()
+    studentsPaging.goToPage(studentsPaging.pageCount.value) // the new student is appended last
+  } catch (error) {
+    await fail('Student Not Added', error)
+  } finally {
+    busy.value = false
+  }
+}
 
-const trendSummary = computed(() => {
-  const points = trendPoints.value
-  if (points.length < 2) return null
-  const first = toNumber(points[0].percentage)
-  const last = toNumber(points[points.length - 1].percentage)
-  const delta = Math.round((last - first) * 10) / 10
-  let label = 'Steady'
-  if (delta > TREND_FLAT_BAND) label = 'Improving'
-  else if (delta < -TREND_FLAT_BAND) label = 'Declining'
-  return { first, last, delta, label, exams: points.length }
-})
+function startEditStudent(student) {
+  editingStudentId.value = student.roster_id
+  editingStudentName.value = student.full_name
+}
 
-// A small inline sparkline (plain SVG, no charting library) over the same
-// points -- normalized to the student's own min/max so a flat run near
-// 90% and a flat run near 40% both still show as a visible flat line.
-const SPARKLINE_WIDTH = 240
-const SPARKLINE_HEIGHT = 48
-const SPARKLINE_PAD = 6
+async function saveEditStudent(student) {
+  const name = editingStudentName.value.trim()
+  if (!name) return
+  try {
+    await API.renameSectionStudent(student.roster_id, name)
+    editingStudentId.value = null
+    await loadStudents()
+  } catch (error) {
+    await fail('Student Not Updated', error)
+  }
+}
 
-const sparklinePoints = computed(() => {
-  const values = trendPoints.value.map((p) => toNumber(p.percentage))
-  if (values.length < 2) return ''
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const range = max - min || 1
-  const usableW = SPARKLINE_WIDTH - SPARKLINE_PAD * 2
-  const usableH = SPARKLINE_HEIGHT - SPARKLINE_PAD * 2
-  return values
-    .map((value, index) => {
-      const x = SPARKLINE_PAD + (usableW * index) / (values.length - 1)
-      const y = SPARKLINE_PAD + usableH - ((value - min) / range) * usableH
-      return `${Math.round(x * 10) / 10},${Math.round(y * 10) / 10}`
-    })
-    .join(' ')
-})
+async function removeStudent(student) {
+  const ok = await showConfirm('Remove Student?', `Remove ${student.full_name} from ${selectedSection.value?.name}?`)
+  if (!ok) return
+  try {
+    await API.deleteSectionStudent(student.roster_id)
+    await loadStudents()
+    await loadSections()
+  } catch (error) {
+    await fail('Student Not Removed', error)
+  }
+}
+
+async function exportSectionReport() {
+  if (!selectedSection.value || exportingReport.value) return
+  exportingReport.value = true
+  try {
+    await exportSectionReportToFile(selectedSection.value.name, students.value)
+  } catch (error) {
+    await fail('Report Not Exported', error)
+  } finally {
+    exportingReport.value = false
+  }
+}
+
+/* ---------- Viewing one student's graded history ---------- */
+const recordsStudent = ref(null)
+const records = ref([])
+const loadingRecords = ref(false)
+const selectedRecordIds = ref(new Set())
+const deletingRecords = ref(false)
+const shown = (percentage) => displayGrade(percentage, store.gradingScale)
+const suffix = computed(() => gradeSuffix(store.gradingScale))
+const scoreHeader = computed(() => gradeHeader(store.gradingScale))
+
+const selectedRecords = computed(() => records.value.filter((record) => selectedRecordIds.value.has(record.sheet_id)))
+const allRecordsSelected = computed(() => records.value.length > 0 && selectedRecords.value.length === records.value.length)
+const partiallyRecordsSelected = computed(() => selectedRecords.value.length > 0 && !allRecordsSelected.value)
+
+function toggleAllRecords() {
+  selectedRecordIds.value = allRecordsSelected.value ? new Set() : new Set(records.value.map((record) => record.sheet_id))
+}
+function toggleRecord(sheetId) {
+  const next = new Set(selectedRecordIds.value)
+  if (next.has(sheetId)) next.delete(sheetId)
+  else next.add(sheetId)
+  selectedRecordIds.value = next
+}
+
+async function viewRecords(student) {
+  recordsStudent.value = student
+  loadingRecords.value = true
+  selectedRecordIds.value = new Set()
+  try {
+    records.value = await API.rosterStudentResults(student.roster_id)
+  } catch (error) {
+    await fail('Records Not Loaded', error)
+    recordsStudent.value = null
+  } finally {
+    loadingRecords.value = false
+  }
+}
+
+function closeRecords() {
+  recordsStudent.value = null
+  records.value = []
+  selectedRecordIds.value = new Set()
+}
 
 function openRecord(record) {
-  store.currentSessionId = record.session.id
-  store.selectedStudentResultId = record.id
+  store.currentSessionId = record.session_id
+  store.selectedStudentResultId = record.sheet_id
   router.push({ name: 'student_result' })
 }
 
-function statusClass(status) {
-  if (status === 'OK') return 'badge-success'
-  if (status === 'Flagged') return 'badge-warning'
-  if (status === 'Wrong' || status === 'Failed') return 'badge-danger'
-  return 'badge-gray'
+async function deleteSelectedRecords() {
+  if (!selectedRecords.value.length || deletingRecords.value) return
+  const targets = [...selectedRecords.value]
+  const count = targets.length
+  if (!await showConfirm(
+    'Delete Selected Submissions',
+    `Permanently delete ${count} graded record${count === 1 ? '' : 's'} for ${recordsStudent.value.full_name}? `
+      + `This removes ${count === 1 ? 'its' : 'their'} answers, score, and stored images. This cannot be undone.`,
+  )) return
+
+  deletingRecords.value = true
+  const failures = []
+  try {
+    for (const record of targets) {
+      try {
+        await API.deleteSheet(record.sheet_id)
+        if (store.selectedStudentResultId === record.sheet_id) store.selectedStudentResultId = null
+      } catch (error) {
+        failures.push(error.message || String(error))
+      }
+    }
+    records.value = await API.rosterStudentResults(recordsStudent.value.roster_id)
+    selectedRecordIds.value = new Set()
+    await loadStudents()
+    if (failures.length) {
+      await showMessage('Some Submissions Were Not Deleted', `${count - failures.length} of ${count} deleted. ${failures.join(' ')}`)
+    }
+  } finally {
+    deletingRecords.value = false
+  }
+}
+
+function reportImport(result, sourceLabel) {
+  const parts = []
+  parts.push(`Added ${result.added.length} student(s) from ${sourceLabel}, in the order they appear.`)
+  if (result.skipped_duplicates?.length) {
+    parts.push(`Skipped ${result.skipped_duplicates.length} already on this list: ${result.skipped_duplicates.join(', ')}.`)
+  }
+  parts.push('Check the list below and correct any misread name before grading.')
+  notice.value = parts.join(' ')
+}
+
+async function importFromImage(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || !selectedSectionId.value) return
+  importing.value = 'Reading the list photo. This can take a minute on a large list...'
+  try {
+    const result = await API.importStudentsFromImage(selectedSectionId.value, file)
+    reportImport(result, 'the photo')
+    await loadStudents()
+    await loadSections()
+    studentsPaging.goToPage(studentsPaging.pageCount.value) // imported names land at the end, in order
+  } catch (error) {
+    await fail('Photo Not Imported', error)
+  } finally {
+    importing.value = ''
+  }
+}
+
+async function importFromExcel(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || !selectedSectionId.value) return
+  importing.value = 'Reading the Excel file...'
+  try {
+    const result = await API.importStudentsFromExcel(selectedSectionId.value, file)
+    reportImport(result, `${result.column} of the Excel file`)
+    await loadStudents()
+    await loadSections()
+    studentsPaging.goToPage(studentsPaging.pageCount.value) // imported names land at the end, in order
+  } catch (error) {
+    await fail('Excel File Not Imported', error)
+  } finally {
+    importing.value = ''
+  }
 }
 </script>
 
@@ -155,162 +334,190 @@ function statusClass(status) {
     <div class="title-block">
       <div class="page-title">Students</div>
       <div class="page-subtitle">
-        Every graded student and answer key across all sessions. Select a student to see their full history.
+        Add the sections you handle, then the students in each section. Graded sheets are checked against these lists.
       </div>
     </div>
 
-    <div v-if="selectedStudent">
-      <section class="card">
-        <div class="card-title">{{ selectedStudent.name }}</div>
-        <div class="results-summary">
-          <span>{{ selectedStudent.section || 'No section on file' }}</span>
-          <span><strong>{{ selectedStudent.sheets }}</strong> sheet(s) graded</span>
-          <span><strong>{{ selectedStudent.average }}%</strong> average score</span>
-          <span v-if="needsAttention(selectedStudent)" class="badge badge-warning">Needs Attention</span>
-        </div>
+    <p v-if="loading" class="muted-text">Loading your sections...</p>
 
-        <div v-if="trendSummary" class="student-trend">
-          <svg
-            class="student-trend-sparkline"
-            :viewBox="`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`"
-            role="img"
-            :aria-label="`Score trend: ${trendSummary.label}, from ${trendSummary.first}% to ${trendSummary.last}%`"
-          >
-            <polyline :points="sparklinePoints" fill="none" stroke="currentColor" stroke-width="2" />
-          </svg>
-          <div>
-            <strong>{{ trendSummary.label }}</strong>
-            <span class="muted-text">
-              {{ trendSummary.first }}% &rarr; {{ trendSummary.last }}% over {{ trendSummary.exams }} exams
-            </span>
+    <div v-else class="students-layout">
+      <section class="card" aria-labelledby="sections-title">
+        <div id="sections-title" class="card-title">Sections</div>
+        <form class="flex gap-12 flex-wrap mt-8" @submit.prevent="createSection">
+          <label class="sr-only" for="new-section">New section name</label>
+          <input id="new-section" v-model="newSectionName" type="text" maxlength="50" placeholder="e.g. BSCS 1-A">
+          <button type="submit" class="btn btn-primary" :disabled="!newSectionName.trim() || busy">Add Section</button>
+        </form>
+
+        <p v-if="!sections.length" class="muted-text mt-14">No sections yet. Add the first one above.</p>
+        <ul v-else class="section-list">
+          <li v-for="section in pagedSections" :key="section.section_id" :class="{ active: section.section_id === selectedSectionId }">
+            <template v-if="editingSectionId === section.section_id">
+              <label class="sr-only" :for="`rename-section-${section.section_id}`">Section name</label>
+              <input :id="`rename-section-${section.section_id}`" v-model="editingSectionName" type="text" maxlength="50">
+              <div class="flex gap-8 mt-8">
+                <button type="button" class="btn btn-primary btn-small" @click="saveRenameSection(section)">Save</button>
+                <button type="button" class="btn btn-secondary btn-small" @click="editingSectionId = null">Cancel</button>
+              </div>
+            </template>
+            <template v-else>
+              <button type="button" class="section-select" :aria-current="section.section_id === selectedSectionId" @click="selectSection(section.section_id)">
+                <strong>{{ section.name }}</strong>
+                <span class="muted-text">{{ section.student_count }} student(s)</span>
+              </button>
+              <div class="flex gap-8 mt-8">
+                <button type="button" class="btn btn-secondary btn-small" @click="startRenameSection(section)">Rename</button>
+                <button type="button" class="btn btn-danger btn-small" @click="removeSection(section)">Delete</button>
+              </div>
+            </template>
+          </li>
+        </ul>
+        <PaginationBar
+          v-model:page="sectionsPaging.page.value"
+          v-model:page-size="sectionsPaging.pageSize.value"
+          :page-count="sectionsPaging.pageCount.value"
+          :total="sectionsPaging.total.value"
+          :range-start="sectionsPaging.rangeStart.value"
+          :range-end="sectionsPaging.rangeEnd.value"
+          item-label="section"
+        />
+      </section>
+
+      <section class="card" aria-labelledby="students-title">
+        <template v-if="selectedSection">
+          <div id="students-title" class="card-title">{{ selectedSection.name }}</div>
+          <p class="muted-text">{{ students.length }} student(s), in the order shown.</p>
+
+          <form class="flex gap-8 flex-wrap mt-8" @submit.prevent="addStudent">
+            <label class="sr-only" for="new-student">Student name</label>
+            <input id="new-student" v-model="newStudentName" type="text" maxlength="150" placeholder="Full name, as on the class list">
+            <button type="submit" class="btn btn-primary" :disabled="!newStudentName.trim() || busy">Add Student</button>
+          </form>
+
+          <div class="flex gap-8 flex-wrap mt-8">
+            <button type="button" class="btn btn-secondary" :disabled="!!importing" @click="imageInput?.click()">
+              Import from Photo of List
+            </button>
+            <button type="button" class="btn btn-secondary" :disabled="!!importing" @click="excelInput?.click()">
+              Import from Excel (.xlsx)
+            </button>
+            <input ref="imageInput" type="file" accept="image/*,.heic,.heif" hidden @change="importFromImage">
+            <input ref="excelInput" type="file" accept=".xlsx" hidden @change="importFromExcel">
+            <button type="button" class="btn btn-success" :disabled="exportingReport || !students.length" @click="exportSectionReport">
+              {{ exportingReport ? 'Exporting...' : 'Export Section Report' }}
+            </button>
           </div>
-        </div>
+          <p v-if="importing" class="muted-text mt-8" role="status">{{ importing }}</p>
+          <p v-if="notice" class="notice mt-8" role="status">{{ notice }}</p>
 
-        <div class="table-wrapper reports-table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Session</th><th>Date</th><th>Answer Key</th>
-                <th>Score</th><th>% Score</th><th>Flagged</th><th>Status</th><th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="record in selectedStudent.records"
-                :key="record.id"
-              >
-                <td>{{ sessionTag(record.session.id) }}</td>
-                <td>{{ formatDateTime(record.session.created_at) }}</td>
-                <td>{{ record.session.answer_key_name || 'No key' }}</td>
-                <td>{{ toNumber(record.score) }} / {{ toNumber(record.total) }}</td>
-                <td>{{ toNumber(record.percentage) }}%</td>
-                <td>{{ toNumber(record.flagged_count) }}</td>
-                <td>
-                  <span class="badge" :class="statusClass(record.status)">{{ record.status || 'Unknown' }}</span>
-                </td>
-                <td>
-                  <button
-                    class="btn btn-secondary btn-small"
-                    :aria-label="`View result from ${sessionTag(record.session.id)}`"
-                    @click="openRecord(record)"
-                  >
-                    View Result
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="workflow-actions">
-          <div class="muted-text student-correction-hint">
-            Need to correct a recognized name or section? Open the relevant submission below.
+          <div class="table-wrapper mt-8">
+            <table>
+              <thead>
+                <tr><th>#</th><th>Full Name</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(student, index) in pagedStudents" :key="student.roster_id">
+                  <td>{{ studentsPaging.rangeStart.value + index }}</td>
+                  <td>
+                    <template v-if="editingStudentId === student.roster_id">
+                      <label class="sr-only" :for="`edit-student-${student.roster_id}`">Student name</label>
+                      <input :id="`edit-student-${student.roster_id}`" v-model="editingStudentName" type="text" maxlength="150">
+                    </template>
+                    <template v-else>{{ student.full_name }}</template>
+                  </td>
+                  <td>
+                    <div class="flex gap-8 flex-wrap">
+                      <template v-if="editingStudentId === student.roster_id">
+                        <button type="button" class="btn btn-primary btn-small" @click="saveEditStudent(student)">Save</button>
+                        <button type="button" class="btn btn-secondary btn-small" @click="editingStudentId = null">Cancel</button>
+                      </template>
+                      <template v-else>
+                        <button type="button" class="btn btn-secondary btn-small" @click="viewRecords(student)">View Records</button>
+                        <button type="button" class="btn btn-secondary btn-small" @click="startEditStudent(student)">Edit</button>
+                        <button type="button" class="btn btn-danger btn-small" @click="removeStudent(student)">Remove</button>
+                      </template>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="!students.length">
+                  <td colspan="3" class="table-empty">No students in this section yet.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <button class="btn btn-secondary" @click="selectedStudentKey = null">Back to Student List</button>
-        </div>
+          <PaginationBar
+            v-model:page="studentsPaging.page.value"
+            v-model:page-size="studentsPaging.pageSize.value"
+            :page-count="studentsPaging.pageCount.value"
+            :total="studentsPaging.total.value"
+            :range-start="studentsPaging.rangeStart.value"
+            :range-end="studentsPaging.rangeEnd.value"
+            item-label="student"
+          />
+        </template>
+        <p v-else class="muted-text">Add a section on the left to start its student list.</p>
       </section>
     </div>
 
-    <div v-else class="students-grid">
-      <section class="card">
-        <div class="card-title">
-          Students Graded
-          <span v-if="attentionCount" class="badge badge-warning">{{ attentionCount }} need attention</span>
+    <div v-if="recordsStudent" class="toast-overlay" @click.self="closeRecords">
+      <div class="toast-box records-box" role="dialog" aria-modal="true" aria-labelledby="records-title">
+        <div id="records-title" class="toast-title">{{ recordsStudent.full_name }} — Graded History</div>
+        <p v-if="loadingRecords" class="muted-text">Loading...</p>
+        <template v-else>
+          <p v-if="!records.length" class="muted-text">No graded sheets are linked to this student yet.</p>
+          <div v-else class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th><input type="checkbox" aria-label="Select all records" :checked="allRecordsSelected" :indeterminate="partiallyRecordsSelected" :disabled="deletingRecords" @change="toggleAllRecords"></th>
+                  <th>Date</th><th>Questionnaire</th><th>Score</th><th>{{ scoreHeader }}</th><th>Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="record in records" :key="record.sheet_id" :class="{ selected: selectedRecordIds.has(record.sheet_id) }">
+                  <td><input type="checkbox" :aria-label="`Select record from ${formatDateTime(record.created_at)}`" :checked="selectedRecordIds.has(record.sheet_id)" :disabled="deletingRecords" @change="toggleRecord(record.sheet_id)"></td>
+                  <td>{{ formatDateTime(record.created_at) }}</td>
+                  <td>{{ record.answer_key_name || 'No questionnaire' }}</td>
+                  <td>{{ record.score }} / {{ record.total }}</td>
+                  <td>{{ shown(record.percentage) }}{{ suffix }}</td>
+                  <td>
+                    <span class="badge" :class="record.status === 'Flagged' ? 'badge-warning' : 'badge-success'">
+                      {{ record.status }}
+                    </span>
+                  </td>
+                  <td><button type="button" class="btn btn-secondary btn-small" @click="openRecord(record)">View</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+        <div class="toast-actions">
+          <span v-if="selectedRecords.length" class="badge badge-gray">{{ selectedRecords.length }} selected</span>
+          <button
+            v-if="records.length"
+            type="button"
+            class="btn btn-danger"
+            :disabled="!selectedRecords.length || deletingRecords"
+            @click="deleteSelectedRecords"
+          >
+            {{ deletingRecords ? 'Deleting...' : `Delete Selected${selectedRecords.length ? ` (${selectedRecords.length})` : ''}` }}
+          </button>
+          <button type="button" class="btn btn-secondary" @click="closeRecords">Close</button>
         </div>
-        <div class="action-bar">
-          <input v-model="query" type="text" placeholder="Search student or section..." aria-label="Search students">
-          <select v-model="selectedSection" aria-label="Filter students by section">
-            <option>All Sections</option>
-            <option v-for="sectionName in sections" :key="sectionName">{{ sectionName }}</option>
-          </select>
-          <select v-model="studentSort" aria-label="Sort students">
-            <option value="name">Sort: Name</option>
-            <option value="section">Sort: Section</option>
-            <option value="attention">Sort: Lowest Average First</option>
-          </select>
-        </div>
-        <div class="table-wrapper reports-table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Student Name</th><th>Section</th><th>Sheets Graded</th><th>Average Score</th><th></th><th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="student in filteredStudents"
-                :key="student.key"
-              >
-                <td>{{ student.name }}</td>
-                <td>{{ canonicalSection(student.section) }}</td>
-                <td>{{ student.sheets }}</td>
-                <td>{{ student.average }}%</td>
-                <td>
-                  <span v-if="needsAttention(student)" class="badge badge-warning">Needs Attention</span>
-                </td>
-                <td>
-                  <button
-                    class="btn btn-secondary btn-small"
-                    :aria-label="`View ${student.name}'s details`"
-                    @click="selectStudent(student)"
-                  >
-                    View Details
-                  </button>
-                </td>
-              </tr>
-              <tr v-if="!loading && !filteredStudents.length">
-                <td colspan="6" class="table-empty">
-                  {{ students.length ? 'No students match your search.' : 'No graded students yet.' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="card-title">Answer Keys</div>
-        <div class="table-wrapper reports-table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Answer Key</th><th>Sheets Graded</th><th>Sessions</th><th>Average Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="key in answerKeys" :key="key.name">
-                <td>{{ key.name }}</td>
-                <td>{{ key.sheets }}</td>
-                <td>{{ key.sessions }}</td>
-                <td>{{ key.average }}%</td>
-              </tr>
-              <tr v-if="!loading && !answerKeys.length">
-                <td colspan="4" class="table-empty">No sheets graded yet.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.students-layout { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; align-items: start; }
+.section-list { list-style: none; padding: 0; margin: 0; margin-top: 14px; display: grid; gap: 10px; }
+.section-list li { border: 1px solid rgba(128, 128, 128, 0.3); border-radius: 10px; padding: 10px; }
+.section-list li.active { border-color: currentColor; }
+.section-select { width: 100%; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; display: grid; gap: 2px; }
+.notice { border-left: 4px solid currentColor; padding: 8px 12px; }
+.records-box { min-width: 320px; max-width: 720px; width: 100%; }
+@media (max-width: 760px) {
+  .students-layout { grid-template-columns: 1fr; }
+}
+</style>

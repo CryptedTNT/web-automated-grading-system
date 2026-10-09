@@ -38,14 +38,31 @@ const NAV_ITEMS = [
   { name: 'settings', icon: 'settings', label: 'Settings', title: 'Change account, export, template, and display settings.' },
 ]
 
-/* ---------- Mobile sidebar ---------- */
-const mobileOpen = ref(false)
-const closeMobile = () => { mobileOpen.value = false }
+/* ---------- Sidebar open/close ----------
+   One toggle, at every screen width -- not just a narrow-screen drawer.
+   #sidebar is a plain flex item (see styles.css), so closing it lets
+   #content-root's `flex: 1` widen to fill the freed space, and opening
+   it narrows the content area back down. There is no fixed-position
+   overlay step: the content genuinely resizes, which is what makes a
+   landscape phone (wide enough to miss the old <=720px "mobile" cutoff,
+   narrow enough that a permanently-visible sidebar cramped the page)
+   behave sensibly -- the teacher can now just close it there too.
 
-// Close the drawer whenever navigation happens — the old code had to
-// call closeMobileSidebar() by hand at every call site.
+   Default state differs by how much room there was on load: open on a
+   desktop-sized viewport (matches the previous always-visible sidebar),
+   closed on a narrow one (matches the previous collapsed drawer). After
+   that it is entirely under the teacher's control via the hamburger
+   button, not re-forced open/closed by resizing or rotating. */
+const NARROW_SCREEN = 720
+const sidebarOpen = ref(window.innerWidth > NARROW_SCREEN)
+const closeSidebar = () => { sidebarOpen.value = false }
+/* Auto-closing after a tap is a narrow-screen convenience (the sidebar
+   is covering most of the page there); a desktop sidebar is expected to
+   stay open across navigation and clicks, the same as it always has. */
+const isNarrowScreen = () => window.innerWidth <= NARROW_SCREEN
+
 watch(() => route.fullPath, () => {
-  closeMobile()
+  if (isNarrowScreen()) closeSidebar()
   // The application shell owns its own scroll container rather than using
   // the browser window. Reset it after every navigation so a teacher never
   // lands halfway down a different screen just because the prior one was
@@ -57,19 +74,17 @@ watch(() => route.fullPath, () => {
 })
 
 function onKeydown(event) {
-  if (event.key === 'Escape') closeMobile()
+  if (event.key === 'Escape' && isNarrowScreen()) closeSidebar()
 }
-function onResize() {
-  if (window.innerWidth > 720) closeMobile()
+function onContentClick() {
+  if (isNarrowScreen()) closeSidebar()
 }
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
-  window.addEventListener('resize', onResize)
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
-  window.removeEventListener('resize', onResize)
 })
 
 /* ---------- Global search ---------- */
@@ -112,7 +127,7 @@ async function logout() {
     <div v-else id="shell" class="active">
       <nav
         id="sidebar"
-        :class="{ 'mobile-open': mobileOpen }"
+        :class="{ 'sidebar-closed': !sidebarOpen }"
         aria-label="Primary navigation"
       >
         <!-- .sidebar-title is `white-space: pre-line`, so this newline is
@@ -167,10 +182,10 @@ async function logout() {
           <button
             type="button"
             class="mobile-menu-btn"
-            aria-label="Open navigation"
+            :aria-label="sidebarOpen ? 'Close navigation' : 'Open navigation'"
             aria-controls="sidebar"
-            :aria-expanded="String(mobileOpen)"
-            @click="mobileOpen = !mobileOpen"
+            :aria-expanded="String(sidebarOpen)"
+            @click="sidebarOpen = !sidebarOpen"
           >
             ☰
           </button>
@@ -190,7 +205,7 @@ async function logout() {
           <span class="top-teacher">{{ store.teacherLabel }}</span>
         </div>
 
-        <main id="pages-container" @click="closeMobile">
+        <main id="pages-container" @click="onContentClick">
           <!-- `key` forces a fresh component per route, matching the old
                one-page-visible-at-a-time behaviour. -->
           <RouterView v-slot="{ Component }">

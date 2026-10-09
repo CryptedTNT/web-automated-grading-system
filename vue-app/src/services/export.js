@@ -18,6 +18,7 @@ import { API } from '@/services/api.js'
 import { showMessage } from '@/services/dialog.js'
 import { questionnaireSessions, sectionExportRecords } from './sectionExport.js'
 import { canonicalSection } from './sections.js'
+import { displayGrade, gradeHeader, gradeSuffix, normalizeGradingScale } from './gradingScale.js'
 
 const SHEETJS_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'
 const SHEETJS_INTEGRITY = 'sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT'
@@ -60,18 +61,22 @@ function sanitizeRows(rows) {
   return rows.map((row) => row.map(sanitizeCell))
 }
 
-export async function exportSessionToFile(sessionId, { announce = true, section = '' } = {}) {
+export async function exportSessionToFile(sessionId, { announce = true, section } = {}) {
   const id = parseInt(sessionId) || null
   if (!id) {
     if (announce) showMessage('No Session', 'No grading session to export.')
     return null
   }
 
+  // `section` distinguishes "no filter" (undefined -- every existing caller
+  // that exports a whole session) from "filter to this canonical section,
+  // including '' for the no-section bucket" (the per-section split below).
+  const sectionSpecified = section !== undefined
+  const normalizedSection = sectionSpecified ? canonicalSection(section) : null
   const allResults = await API.studentResults(id)
-  const normalizedSection = canonicalSection(section)
-  const results = normalizedSection
+  const results = sectionSpecified
     ? allResults.filter((result) => canonicalSection(result.section) === normalizedSection)
-      .map((result) => ({ ...result, section: normalizedSection }))
+      .map((result) => ({ ...result, section: normalizedSection || 'No Section' }))
     : allResults
   if (!results.length) {
     if (announce) showMessage('No Data', 'No results in this session to export.')
@@ -80,8 +85,8 @@ export async function exportSessionToFile(sessionId, { announce = true, section 
 
   const prefs = await API.getExportPreferences()
   let requestedFilename = await formatExportFilename(id, prefs)
-  if (normalizedSection) {
-    const suffix = normalizedSection.replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_')
+  if (sectionSpecified) {
+    const suffix = (normalizedSection || 'No_Section').replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_')
     requestedFilename = requestedFilename.replace(/\.(xlsx|csv)$/i, `_${suffix}.$1`)
   }
   return exportResultsToFile(results, prefs, requestedFilename, announce)
@@ -97,7 +102,7 @@ export async function exportSectionToFile(questionnaireId, section, { sessionIds
   )
   const results = sectionExportRecords(records, questionnaireId, section)
   if (!results.length) {
-    await showMessage('No Matching Students', 'No completed submissions match this questionnaire and section.')
+    await showMessage('No Matching Students', 'No completed students match this questionnaire and section.')
     return null
   }
   const prefs = await API.getExportPreferences()
@@ -141,8 +146,85 @@ export async function exportStudentsToFile(selectedRecords) {
   return exportResultsToFile(results, prefs, filename, true, 'students', { excelOnly: true })
 }
 
+/* A per-session or per-student export only ever shows what was submitted.
+   A section adviser instead needs the other direction too -- of everyone on
+   the roster, who has and hasn't taken each quiz given to this section so
+   far -- which no existing export answers, since a student who never
+   submitted anything has no result row to begin with. This builds that
+   roster x quiz matrix straight from each student's own graded history
+   (the same data View Records already shows one student at a time), and
+   marks a missing cell "Not Taken" rather than leaving it blank, so it
+   reads the same whether opened in Excel, LibreOffice, or as a CSV. */
+export async function exportSectionReportToFile(sectionName, students) {
+  if (!students.length) {
+    await showMessage('No Students', 'Add students to this section before exporting its report.')
+    return null
+  }
+
+  const [settings, recordLists] = await Promise.all([
+    API.getSettings(),
+    Promise.all(students.map((student) => API.rosterStudentResults(student.roster_id))),
+  ])
+  const scale = normalizeGradingScale(settings.grading_scale)
+
+  // rosterStudentResults returns newest first, so the first record seen
+  // for a given quiz name is that student's latest attempt at it.
+  const perStudentQuiz = recordLists.map((records) => {
+    const byQuiz = new Map()
+    for (const record of records) {
+      const name = record.answer_key_name || 'Untitled Questionnaire'
+      if (!byQuiz.has(name)) byQuiz.set(name, record)
+    }
+    return byQuiz
+  })
+  const quizzes = [...new Set(perStudentQuiz.flatMap((byQuiz) => [...byQuiz.keys()]))].sort((a, b) => a.localeCompare(b))
+  if (!quizzes.length) {
+    await showMessage('No Quizzes Taken', `No one in ${sectionName} has a graded quiz yet.`)
+    return null
+  }
+
+  const header = ['#', 'Student Name', ...quizzes, 'Quizzes Taken']
+  const rows = [header]
+  students.forEach((student, index) => {
+    const byQuiz = perStudentQuiz[index]
+    const row = [index + 1, student.full_name]
+    let taken = 0
+    for (const quiz of quizzes) {
+      const record = byQuiz.get(quiz)
+      if (record) {
+        taken += 1
+        row.push(`${displayGrade(record.percentage, scale)}${gradeSuffix(scale)}`)
+      } else {
+        row.push('Not Taken')
+      }
+    }
+    row.push(`${taken} / ${quizzes.length}`)
+    rows.push(row)
+  })
+  const sanitized = sanitizeRows(rows)
+
+  const prefs = await API.getExportPreferences()
+  const suffix = sectionName.replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_')
+  const baseName = `Section_Report_${suffix}_${new Date().toISOString().slice(0, 10)}`
+  const forceCsv = /\.csv$/i.test(prefs.filename_format || '')
+
+  if (!forceCsv && (await loadSheetJs())) {
+    const filename = `${baseName}.xlsx`
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sanitized), 'Section Report')
+    XLSX.writeFile(workbook, filename)
+    await showMessage('Exported', `Excel file downloaded: ${filename}`)
+    return filename
+  }
+  const filename = `${baseName}.csv`
+  downloadCsv(sanitized, filename)
+  await showMessage('Exported', `CSV file downloaded: ${filename}`)
+  return filename
+}
+
 async function exportResultsToFile(results, prefs, requestedFilename, announce, includeSession = false, { excelOnly = false } = {}) {
-  const summaryData = sanitizeRows(buildSummaryRows(results, prefs, includeSession))
+  const scale = normalizeGradingScale((await API.getSettings()).grading_scale)
+  const summaryData = sanitizeRows(buildSummaryRows(results, prefs, includeSession, scale))
   const detailData = prefs.include_item_scores ? sanitizeRows(await buildDetailRows(results, prefs, includeSession)) : null
   const forceCsv = /\.csv$/i.test(requestedFilename)
 
@@ -170,12 +252,12 @@ async function exportResultsToFile(results, prefs, requestedFilename, announce, 
   return filename
 }
 
-function buildSummaryRows(results, prefs, includeSession = false) {
+function buildSummaryRows(results, prefs, includeSession = false, scale = 'percentage') {
   const header = ['#']
   if (includeSession === 'students') header.push('Questionnaire', 'Submission Date')
   else if (includeSession) header.push('Session ID', 'Session Date', 'Questionnaire')
   if (prefs.include_student_info) header.push('Student Name', 'Section')
-  if (prefs.include_total_score) header.push('Score', 'Total', '% Score')
+  if (prefs.include_total_score) header.push('Score', 'Total', gradeHeader(scale))
   if (prefs.include_flagged_notes) header.push('Flagged', 'Status')
 
   const rows = [header]
@@ -184,7 +266,7 @@ function buildSummaryRows(results, prefs, includeSession = false) {
     if (includeSession === 'students') row.push(result.session.answer_key_name || '', result.created_at || result.session.created_at)
     else if (includeSession) row.push(result.session.id, result.session.created_at, result.session.answer_key_name || '')
     if (prefs.include_student_info) row.push(result.student_name || '', result.section || '')
-    if (prefs.include_total_score) row.push(result.score, result.total, result.percentage)
+    if (prefs.include_total_score) row.push(result.score, result.total, displayGrade(result.percentage, scale))
     if (prefs.include_flagged_notes) row.push(result.flagged_count, result.status)
     rows.push(row)
   })

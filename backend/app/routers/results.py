@@ -8,24 +8,29 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, aliased
 
 from app.config import settings
 from app.db import get_db
 from app.models import (
     AnswerKeyItem,
+    ClassSection,
+    ExamSheet,
     Faculty,
     GradingResult,
     GradingSession,
     ManualReview,
+    RosterStudent,
     StudentAnswer,
     StudentInfo,
     VFlaggedQueue,
     VResultItem,
     VSheetResult,
 )
-from app.schemas import ReviewRequest, UpdateStudentIdentityRequest
+from app.roster import find_duplicate_sheet, name_similarity, resolve_identity
+from app.routers.sessions import _remove_session_files, _remove_sheet_files, _uploads_in_flight
+from app.schemas import ReviewRequest, SheetRosterRequest, UpdateStudentIdentityRequest
 from app.security import get_current_faculty
 from app.sections import canonical_section
 
@@ -66,8 +71,48 @@ def _owned_result(result_id: int, faculty: Faculty, db: Session) -> GradingResul
     return result
 
 
-def _sheet_shape(row: VSheetResult) -> dict:
+def _identity_map(db: Session, sheet_ids: list[int]) -> dict[int, dict]:
+    if not sheet_ids:
+        return {}
+    DuplicateSheet = aliased(ExamSheet)
+    rows = db.execute(
+        select(
+            StudentInfo.sheet_id,
+            StudentInfo.detected_name,
+            StudentInfo.section_id,
+            StudentInfo.roster_id,
+            StudentInfo.roster_status,
+            StudentInfo.roster_score,
+            StudentInfo.duplicate_of_sheet_id,
+            DuplicateSheet.session_id,
+        )
+        .outerjoin(DuplicateSheet, DuplicateSheet.sheet_id == StudentInfo.duplicate_of_sheet_id)
+        .where(StudentInfo.sheet_id.in_(sheet_ids))
+    )
     return {
+        row.sheet_id: {
+            "detected_name": row.detected_name,
+            "section_id": row.section_id,
+            "roster_id": row.roster_id,
+            "roster_status": row.roster_status,
+            "roster_score": float(row.roster_score) if row.roster_score is not None else None,
+            "duplicate_of_sheet_id": row.duplicate_of_sheet_id,
+            "duplicate_of_session_id": row.session_id,
+        }
+        for row in rows
+    }
+
+
+def _sheet_shape(row: VSheetResult, identity: dict | None = None) -> dict:
+    identity = identity or {}
+    return {
+        "detected_name": identity.get("detected_name"),
+        "section_id": identity.get("section_id"),
+        "roster_id": identity.get("roster_id"),
+        "roster_status": identity.get("roster_status"),
+        "roster_score": identity.get("roster_score"),
+        "duplicate_of_sheet_id": identity.get("duplicate_of_sheet_id"),
+        "duplicate_of_session_id": identity.get("duplicate_of_session_id"),
         "id": row.sheet_id,
         "session_id": row.session_id,
         "student_name": row.student_name,
@@ -110,10 +155,11 @@ def session_results(
     session_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)
 ):
     _owned_session_id(session_id, faculty, db)
-    rows = db.scalars(
-        select(VSheetResult).where(VSheetResult.session_id == session_id).order_by(VSheetResult.sheet_id)
+    rows = list(
+        db.scalars(select(VSheetResult).where(VSheetResult.session_id == session_id).order_by(VSheetResult.sheet_id))
     )
-    return [_sheet_shape(r) for r in rows]
+    identity = _identity_map(db, [r.sheet_id for r in rows])
+    return [_sheet_shape(r, identity.get(r.sheet_id)) for r in rows]
 
 
 @router.get("/sheets/{sheet_id}")
@@ -122,7 +168,45 @@ def sheet_result(sheet_id: int, faculty: Faculty = Depends(get_current_faculty),
     row = db.scalar(select(VSheetResult).where(VSheetResult.sheet_id == sheet_id))
     if not row:
         raise HTTPException(status_code=404, detail="Sheet not found.")
-    return _sheet_shape(row)
+    return _sheet_shape(row, _identity_map(db, [sheet_id]).get(sheet_id))
+
+
+@router.delete("/sheets/{sheet_id}", status_code=204)
+def delete_sheet(sheet_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
+    """Removes one student's submission -- for a duplicate (a sheet
+    flagged as a repeat of another), a sheet that belongs under the wrong
+    answer key, or any other single record that should not exist. The
+    rest of the session, and every other student in it, is untouched --
+    unless this was the last sheet left, in which case the now-empty
+    session is removed too, since it would otherwise linger in the
+    session picker, Results, and Reports with nothing to show.
+    """
+    _owned_sheet_id(sheet_id, faculty, db)
+    sheet = db.get(ExamSheet, sheet_id)
+    if sheet is None:
+        raise HTTPException(status_code=404, detail="Sheet not found.")
+    if _uploads_in_flight.get(sheet.session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This session is still grading a submission. Cancel it on the Processing page, "
+            "wait a few seconds for it to stop, then delete it.",
+        )
+    session_id, sheet_code = sheet.session_id, sheet.sheet_code
+    db.delete(sheet)  # student_info/student_answer/grading_result/manual_review cascade
+    db.commit()
+
+    remaining = db.scalar(select(func.count()).select_from(ExamSheet).where(ExamSheet.session_id == session_id))
+    if remaining:
+        _remove_sheet_files(session_id, sheet_code)
+        return
+
+    # No students left in this session -- it has nothing to show in Results
+    # or Reports, so it would just be clutter in the session picker.
+    gs = db.get(GradingSession, session_id)
+    if gs:
+        db.delete(gs)
+        db.commit()
+    _remove_session_files(session_id)
 
 
 @router.patch("/sheets/{sheet_id}/identity")
@@ -143,15 +227,70 @@ def update_sheet_identity(
     if not info:
         raise HTTPException(status_code=404, detail="Student details not found.")
 
-    info.name = body.name
-    info.section = canonical_section(body.section)
+    resolved = resolve_identity(db, faculty.faculty_id, body.name, body.section)
+    info.name = resolved["name"]
+    info.section = resolved["section"]
+    info.section_id = resolved["section_id"]
+    info.roster_id = resolved["roster_id"]
+    info.roster_status = resolved["roster_status"]
+    info.roster_score = resolved["roster_score"]
+    # A corrected name/section can change who this looks like a repeat
+    # of, so the duplicate check runs again rather than keeping a flag
+    # (or lack of one) decided under the old, wrong identity.
+    answer_key_id = db.scalar(select(ExamSheet.answer_key_id).where(ExamSheet.sheet_id == sheet_id))
+    info.duplicate_of_sheet_id = find_duplicate_sheet(db, answer_key_id, info.roster_id, info.name, sheet_id)
     db.add(info)
     db.commit()
 
     row = db.scalar(select(VSheetResult).where(VSheetResult.sheet_id == sheet_id))
     if not row:
         raise HTTPException(status_code=404, detail="Sheet not found.")
-    return _sheet_shape(row)
+    return _sheet_shape(row, _identity_map(db, [sheet_id]).get(sheet_id))
+
+
+@router.patch("/sheets/{sheet_id}/roster")
+def set_sheet_roster(
+    sheet_id: int,
+    body: SheetRosterRequest,
+    faculty: Faculty = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """The teacher's decision on the name check: confirm a suggested student, assign
+    one, or clear the link (roster_id null) when the sheet belongs to nobody on the list."""
+    _owned_sheet_id(sheet_id, faculty, db)
+    info = db.scalar(select(StudentInfo).where(StudentInfo.sheet_id == sheet_id))
+    if info is None:
+        raise HTTPException(status_code=404, detail="Student details not found.")
+
+    if body.roster_id is None:
+        info.roster_id = None
+        info.roster_status = "unmatched"
+        info.roster_score = None
+        info.name = info.detected_name or info.name
+    else:
+        student = db.scalar(
+            select(RosterStudent)
+            .join(ClassSection, ClassSection.section_id == RosterStudent.section_id)
+            .where(RosterStudent.roster_id == body.roster_id, ClassSection.faculty_id == faculty.faculty_id)
+        )
+        if student is None:
+            raise HTTPException(status_code=404, detail="That student is not on your lists.")
+        section = db.get(ClassSection, student.section_id)
+        info.roster_id = student.roster_id
+        info.section_id = student.section_id
+        info.section = section.section_name
+        info.roster_status = "confirmed"
+        info.roster_score = name_similarity(info.detected_name or info.name, student.full_name)
+        info.name = student.full_name
+    answer_key_id = db.scalar(select(ExamSheet.answer_key_id).where(ExamSheet.sheet_id == sheet_id))
+    info.duplicate_of_sheet_id = find_duplicate_sheet(db, answer_key_id, info.roster_id, info.name, sheet_id)
+    db.add(info)
+    db.commit()
+
+    row = db.scalar(select(VSheetResult).where(VSheetResult.sheet_id == sheet_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Sheet not found.")
+    return _sheet_shape(row, _identity_map(db, [sheet_id]).get(sheet_id))
 
 
 @router.get("/sheets/{sheet_id}/items")

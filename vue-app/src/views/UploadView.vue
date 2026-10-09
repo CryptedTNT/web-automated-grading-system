@@ -278,7 +278,7 @@ function chunkFlat(entries) {
   for (let i = 0; i < entries.length; i += size) {
     result.push({
       key: nextGroupKey(),
-      label: `Submission ${groups.value.length + result.length + 1}`,
+      label: `Student ${groups.value.length + result.length + 1}`,
       source: entries[0]?.source || 'Images',
       pages: entries.slice(i, i + size),
     })
@@ -403,7 +403,7 @@ function removePage(groupIndex, pageIndex) {
    actually on screen, including right after a removal. */
 function displayGroupLabel(group, index) {
   if (group.source === 'Folder') return group.label
-  return group.source === 'Camera' ? `Submission ${index + 1} (captured)` : `Submission ${index + 1}`
+  return group.source === 'Camera' ? `Student ${index + 1} (captured)` : `Student ${index + 1}`
 }
 
 /* The "Move to..." dropdown on EVERY page row used to re-run
@@ -418,7 +418,7 @@ async function deleteGroup(groupIndex) {
   const group = groups.value[groupIndex]
   if (!group) return
   const ok = await showConfirm(
-    'Remove Submission?',
+    'Remove Student?',
     `Remove "${displayGroupLabel(group, groupIndex)}" and its ${group.pages.length} page(s) from the queue?`,
   )
   if (!ok) return
@@ -442,7 +442,7 @@ function movePage(groupIndex, pageIndex, targetKey) {
   next = next.filter((group) => group.pages.length > 0)
 
   if (targetKey === '__new__') {
-    next = [...next, { key: nextGroupKey(), label: `Submission ${next.length + 1}`, source: source.source, pages: [entry] }]
+    next = [...next, { key: nextGroupKey(), label: `Student ${next.length + 1}`, source: source.source, pages: [entry] }]
   } else {
     next = next.map((group) => (group.key === targetKey ? { ...group, pages: [...group.pages, entry] } : group))
   }
@@ -671,7 +671,7 @@ function finishStudent() {
   if (!capturedPages.value.length) return
   groups.value = [
     ...groups.value,
-    { key: nextGroupKey(), label: `Submission ${groups.value.length + 1} (captured)`, source: 'Camera', pages: capturedPages.value },
+    { key: nextGroupKey(), label: `Student ${groups.value.length + 1} (captured)`, source: 'Camera', pages: capturedPages.value },
   ]
   capturedPages.value = []
 }
@@ -717,8 +717,8 @@ async function proceed() {
   }
   if (anyMismatched.value) {
     await showMessage(
-      'Check Submissions',
-      `One or more submissions don't have ${pagesPerStudent.value} page(s). Fix them in Review Submissions before continuing.`,
+      'Check Students',
+      `One or more students don't have ${pagesPerStudent.value} page(s). Fix them in Review Students before continuing.`,
     )
     return
   }
@@ -760,7 +760,7 @@ async function proceed() {
             type="number"
             min="1"
             max="20"
-            title="How many physical pages make up one student's submission. Only used to auto-group flat image uploads into submissions and to guide live capture -- folders always group by folder, and any submission can be fixed by hand below."
+            title="How many physical pages make up one student. Only used to auto-group flat image uploads by student and to guide live capture -- folders always group by folder, and any student's pages can be fixed by hand below."
           >
         </div>
 
@@ -773,7 +773,7 @@ async function proceed() {
         </button>
 
         <div class="queue-summary" aria-label="Upload queue summary">
-          <div><span>Submissions</span><strong>{{ groups.length }}</strong></div>
+          <div><span>Students</span><strong>{{ groups.length }}</strong></div>
           <div><span>Pages</span><strong>{{ totalPages }}</strong></div>
           <div><span>Total size</span><strong>{{ formatBytes(totalBytes) }}</strong></div>
           <div><span>Folders</span><strong>{{ folderCount }}</strong></div>
@@ -782,7 +782,7 @@ async function proceed() {
         <div class="model-note mt-14">
           <span class="badge badge-blue">Automated Grading</span>
           <p>
-            Each submission is graded automatically when grading runs; low-confidence answers are flagged for review.
+            Each student is graded automatically when grading runs; low-confidence answers are flagged for review.
           </p>
         </div>
       </aside>
@@ -865,10 +865,10 @@ async function proceed() {
 
         <div class="queue-heading">
           <div>
-            <div class="section-title">Review Submissions</div>
+            <div class="section-title">Review Students</div>
             <div class="muted-text">
-              {{ groups.length ? `${groups.length} submission(s), ${totalPages} page(s) total.` : 'No submissions yet.' }}
-              <span v-if="anyMismatched" class="badge badge-warning ml-8">Some submissions need attention</span>
+              {{ groups.length ? `${groups.length} student(s), ${totalPages} page(s) total.` : 'No students yet.' }}
+              <span v-if="anyMismatched" class="badge badge-warning ml-8">Some students need attention</span>
             </div>
           </div>
           <button
@@ -901,7 +901,7 @@ async function proceed() {
                 </span>
               </div>
               <button type="button" class="btn btn-secondary btn-small" @click="deleteGroup(groupIndex)">
-                Remove Submission
+                Remove Student
               </button>
             </div>
 
@@ -940,11 +940,11 @@ async function proceed() {
                 <select
                   class="submission-move-select"
                   :value="group.key"
-                  title="Move this page to a different submission"
+                  title="Move this page to a different student"
                   @change="movePage(groupIndex, pageIndex, $event.target.value)"
                 >
                   <option :value="group.key" disabled>Move to...</option>
-                  <option value="__new__">New submission</option>
+                  <option value="__new__">New student</option>
                   <option
                     v-for="opt in groupOptions"
                     :key="opt.key"

@@ -198,3 +198,31 @@ class ExportPreferencesRequest(BaseModel):
     include_total_score: bool = True
     include_flagged_notes: bool = True
     include_question_type: bool = True
+
+
+class SectionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+
+    @field_validator("name")
+    @classmethod
+    def _nonblank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Section name cannot be blank.")
+        return value
+
+
+class RosterStudentIn(BaseModel):
+    full_name: str = Field(min_length=1, max_length=150)
+
+    @field_validator("full_name")
+    @classmethod
+    def _nonblank(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Student name cannot be blank.")
+        return value
+
+
+class SheetRosterRequest(BaseModel):
+    roster_id: int | None = None

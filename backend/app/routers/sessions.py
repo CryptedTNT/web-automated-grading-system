@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.schemas import CreateSessionRequest, UpdateSessionStatusRequest
 from app.security import get_current_faculty
+from app.roster import find_duplicate_sheet, resolve_identity
 from app.sections import canonical_section
 from app.utils import SESSION_STATUS_TO_CODE, SESSION_STATUS_TO_LABEL, make_sheet_code
 
@@ -104,6 +105,16 @@ def _remove_session_files(session_id: int) -> None:
     """Removes every uploaded page and crop belonging to one discarded run."""
     for root in (settings.upload_dir, settings.crop_dir):
         shutil.rmtree(root / f"session_{session_id}", ignore_errors=True)
+
+
+def _remove_sheet_files(session_id: int, sheet_code: str) -> None:
+    """Removes one submission's page photos and answer crops, leaving the
+    rest of the session (and its other students' files) untouched -- unlike
+    _remove_session_files, which discards the whole run's folder."""
+    for page in (settings.upload_dir / f"session_{session_id}").glob(f"{sheet_code}_p*"):
+        page.unlink(missing_ok=True)
+    for crop in (settings.crop_dir / f"session_{session_id}").glob(f"{sheet_code}_item*"):
+        crop.unlink(missing_ok=True)
 
 
 def _discard_cancelled_session_if_idle(session_id: int, db: Session) -> bool:
@@ -413,11 +424,24 @@ async def _grade_submission(
     if on_progress:
         on_progress(0.97, 'Saving grades')
     identity = result["identity"]
+    roster = resolve_identity(db, gs.faculty_id, identity.get("name"), identity.get("section"))
+    # Same questionnaire, same apparent student, a different sheet already
+    # on file -- very likely a re-upload rather than a second, real attempt.
+    # This only flags it for the teacher; it never blocks or merges anything.
+    duplicate_of_sheet_id = find_duplicate_sheet(
+        db, gs.answer_key_id, roster["roster_id"], roster["name"], sheet.sheet_id
+    )
     db.add(
         StudentInfo(
             sheet_id=sheet.sheet_id,
-            name=identity.get("name"),
-            section=canonical_section(identity.get("section")) or None,
+            name=roster["name"],
+            detected_name=roster["detected_name"],
+            section=roster["section"],
+            section_id=roster["section_id"],
+            roster_id=roster["roster_id"],
+            roster_status=roster["roster_status"],
+            roster_score=roster["roster_score"],
+            duplicate_of_sheet_id=duplicate_of_sheet_id,
             consent_status="consented" if consent_confirmed else "not_consented",
         )
     )
