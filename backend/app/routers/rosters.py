@@ -15,7 +15,7 @@ from app.db import get_db
 from app.image_formats import ImageFormatError, heif_to_jpeg, is_heif_filename
 from app.inference import recognizer
 from app.models import AnswerKey, ClassSection, Faculty, GradingSession, RosterStudent, StudentInfo, VSheetResult
-from app.roster import normalize_name
+from app.roster import backfill_roster_links, name_dedupe_key
 from app.roster_import import RosterImportError, extract_names_from_excel, extract_names_from_image
 from app.schemas import RosterStudentIn, SectionIn
 from app.security import get_current_faculty
@@ -63,17 +63,17 @@ def _section_name_taken(faculty: Faculty, name: str, db: Session, exclude_id: in
 
 
 def _name_taken(section_id: int, full_name: str, db: Session, exclude_id: int | None = None) -> bool:
-    key = normalize_name(full_name)
+    key = name_dedupe_key(full_name)
     rows = db.execute(
         select(RosterStudent.roster_id, RosterStudent.full_name).where(RosterStudent.section_id == section_id)
     )
-    return any(normalize_name(name) == key and roster_id != exclude_id for roster_id, name in rows)
+    return any(name_dedupe_key(name) == key and roster_id != exclude_id for roster_id, name in rows)
 
 
 def _append_students(section_id: int, names: list[str], db: Session) -> tuple[list[str], list[str]]:
     """Adds names in the given order, skipping any already on the list."""
     existing = {
-        normalize_name(name)
+        name_dedupe_key(name)
         for name in db.scalars(select(RosterStudent.full_name).where(RosterStudent.section_id == section_id))
     }
     next_position = (
@@ -85,7 +85,7 @@ def _append_students(section_id: int, names: list[str], db: Session) -> tuple[li
         full_name = " ".join(raw.split())[:150]
         if not full_name:
             continue
-        key = normalize_name(full_name)
+        key = name_dedupe_key(full_name)
         if key in existing:
             skipped.append(full_name)
             continue
@@ -179,6 +179,10 @@ def add_student(
         raise HTTPException(status_code=409, detail=f'"{body.full_name}" is already on this section\'s list.')
     added, _ = _append_students(section_id, [body.full_name], db)
     db.commit()
+    # A sheet graded before this student was on any list can never be
+    # re-checked on its own -- catch up now rather than leaving it
+    # permanently unlinked (see roster.py's backfill_roster_links).
+    backfill_roster_links(db, faculty.faculty_id)
     student = db.scalar(
         select(RosterStudent).where(RosterStudent.section_id == section_id).order_by(RosterStudent.roster_id.desc())
     )
@@ -282,6 +286,7 @@ async def import_students_from_image(
         )
     added, skipped = _append_students(section_id, names, db)
     db.commit()
+    backfill_roster_links(db, faculty.faculty_id)
     return {"added": added, "skipped_duplicates": skipped, "lines_read": len(names)}
 
 
@@ -302,4 +307,5 @@ async def import_students_from_excel(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     added, skipped = _append_students(section_id, names, db)
     db.commit()
+    backfill_roster_links(db, faculty.faculty_id)
     return {"added": added, "skipped_duplicates": skipped, "column": column, "rows_read": len(names)}

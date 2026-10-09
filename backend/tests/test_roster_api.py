@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
-from app.models import ClassSection, RosterStudent, StudentInfo
+from app.models import ClassSection, ExamSheet, GradingSession, RosterStudent, StudentInfo
 from app.security import get_current_faculty
 
 
@@ -29,7 +29,20 @@ class RosterApiTests(unittest.TestCase):
         engine = create_engine(
             "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
         )
-        Base.metadata.create_all(engine, tables=[ClassSection.__table__, RosterStudent.__table__, StudentInfo.__table__])
+        # ExamSheet/GradingSession are needed too: adding or importing
+        # roster students now also runs backfill_roster_links(), which
+        # joins student_info through them to re-check already-graded,
+        # still-unlinked sheets against the roster (see app/roster.py).
+        Base.metadata.create_all(
+            engine,
+            tables=[
+                ClassSection.__table__,
+                RosterStudent.__table__,
+                StudentInfo.__table__,
+                ExamSheet.__table__,
+                GradingSession.__table__,
+            ],
+        )
         Local = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 
         def override_db():

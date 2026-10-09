@@ -19,7 +19,7 @@ from rapidfuzz.distance import Levenshtein
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ClassSection, ExamSheet, RosterStudent, StudentInfo
+from app.models import ClassSection, ExamSheet, GradingSession, RosterStudent, StudentInfo
 from app.sections import canonical_section
 
 NAME_SUGGESTION_THRESHOLD = 70.0
@@ -34,6 +34,16 @@ def normalize_name(value: str | None) -> str:
 
 def _token_key(normalized: str) -> str:
     return " ".join(sorted(normalized.split()))
+
+
+def name_dedupe_key(value: str | None) -> str:
+    """Word-order-insensitive key for detecting the same student entered
+    two different ways on a roster (e.g. an Excel list using "Last,
+    First" for some rows and "First Last" for others). Same comparison
+    same_name()/match_name() already use for matching a graded sheet to
+    the roster -- kept separate so callers that just need a dedupe key
+    don't have to compare two full names against each other."""
+    return _token_key(normalize_name(value))
 
 
 def same_name(left: str | None, right: str | None) -> bool:
@@ -138,6 +148,73 @@ def resolve_identity(
         "roster_status": match.status,
         "roster_score": match.score,
     }
+
+
+def backfill_roster_links(db: Session, faculty_id: int) -> int:
+    """Re-checks already-graded sheets that have no roster link against
+    the teacher's current rosters. resolve_identity only ever runs once,
+    at grading time, so without this a sheet graded before any class
+    list existed (roster_status NULL) or before the matching student had
+    been added yet (roster_status 'unmatched') could never be linked
+    afterward -- not even by hand, since the "Name Check" panel only
+    showed itself when roster_status was already set. Never touches a
+    row with a roster_id already set, or one the teacher already
+    confirmed/rejected ('suggested' included) -- only ever reduces to
+    "still nothing found" or a real match for this specific call.
+    Returns how many sheets were newly linked."""
+    sections = [
+        (row.section_id, row.section_name)
+        for row in db.execute(
+            select(ClassSection.section_id, ClassSection.section_name).where(
+                ClassSection.faculty_id == faculty_id
+            )
+        )
+    ]
+    if not sections:
+        return 0
+    section_names = dict(sections)
+    roster_rows = list(
+        db.execute(
+            select(RosterStudent.roster_id, RosterStudent.full_name, RosterStudent.section_id)
+            .where(RosterStudent.section_id.in_(section_names))
+            .order_by(RosterStudent.section_id, RosterStudent.position)
+        )
+    )
+    if not roster_rows:
+        return 0
+
+    candidates = db.scalars(
+        select(StudentInfo)
+        .join(ExamSheet, ExamSheet.sheet_id == StudentInfo.sheet_id)
+        .join(GradingSession, GradingSession.session_id == ExamSheet.session_id)
+        .where(
+            GradingSession.faculty_id == faculty_id,
+            StudentInfo.roster_id.is_(None),
+            StudentInfo.roster_status.in_([None, "unmatched"]),
+        )
+    ).all()
+
+    linked = 0
+    for info in candidates:
+        scoped = roster_rows
+        if info.section_id is not None and info.section_id in section_names:
+            scoped = [row for row in roster_rows if row.section_id == info.section_id]
+        match = match_name(info.detected_name, [(row.roster_id, row.full_name) for row in scoped])
+        if match.roster_id is None:
+            continue
+        matched_row = next(row for row in roster_rows if row.roster_id == match.roster_id)
+        info.roster_id = matched_row.roster_id
+        info.section_id = matched_row.section_id
+        info.section = section_names.get(matched_row.section_id)
+        info.roster_status = match.status
+        info.roster_score = match.score
+        if match.status == "matched":
+            info.name = matched_row.full_name
+        db.add(info)
+        linked += 1
+    if linked:
+        db.commit()
+    return linked
 
 
 def find_duplicate_sheet(

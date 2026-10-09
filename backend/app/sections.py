@@ -44,4 +44,13 @@ def canonical_section(value: str | None) -> str:
         program = _canonical_program(match.group(1))
         return f"{program} {match.group(2)}-{match.group(3)}"
 
+    # Senior-high-style sections have no year digit at all (e.g. "STEM-A"),
+    # so the branch above never applies to them -- without this, "STEM A"
+    # and "STEM-A" canonicalize to two different strings (space kept vs.
+    # hyphen kept) and show up as two separate sections everywhere.
+    match = re.fullmatch(r"(.+?)\s*[- ]\s*([A-Z])", text)
+    if match:
+        program = _canonical_program(match.group(1))
+        return f"{program}-{match.group(2)}"
+
     return re.sub(r"\s*-\s*", "-", text)
