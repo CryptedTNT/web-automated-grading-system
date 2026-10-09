@@ -5,10 +5,10 @@ from inside backend/, with a venv active and .env filled in.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.routers import answer_keys, auth, dashboard, results, rosters, sessions, settings as settings_router
+from app.session_middleware import RememberAwareSessionMiddleware
 
 # Swagger/ReDoc/openapi.json are public by default -- viewing them needs
 # no session cookie, only calling the endpoints they describe does. That's
@@ -29,9 +29,13 @@ app = FastAPI(
 # see app/security.py for why this project uses cookie sessions instead
 # of JWTs. https_only follows SESSION_COOKIE_SECURE (see config.py) --
 # must be true in production, since a session cookie without it can be
-# read over an unencrypted connection (e.g. on public wifi).
+# read over an unencrypted connection (e.g. on public wifi). The 14-day
+# max_age only actually reaches the browser when the login set
+# remember_me (see RememberAwareSessionMiddleware) -- otherwise the
+# cookie carries no Max-Age at all, so it's cleared when the browser
+# closes, same as any other "until you quit" cookie.
 app.add_middleware(
-    SessionMiddleware,
+    RememberAwareSessionMiddleware,
     secret_key=settings.secret_key,
     same_site="lax",
     https_only=settings.session_cookie_secure,

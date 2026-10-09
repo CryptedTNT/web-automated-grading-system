@@ -220,6 +220,7 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
 
     request.session.clear()
     request.session["faculty_id"] = faculty.faculty_id
+    request.session["remember_me"] = bool(body.remember_me)
     return _public_shape(faculty)
 
 

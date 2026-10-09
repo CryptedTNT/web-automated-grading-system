@@ -39,7 +39,7 @@ const status = computed(
   () =>
     failureMessage.value ||
     STATUS_MESSAGES[route.query.status] ||
-    'Sign in with the teacher account saved in this browser.',
+    'Sign in with your teacher account.',
 )
 
 const passwordInput = ref(null)
@@ -54,7 +54,7 @@ async function submit() {
 
   let user
   try {
-    user = await API.verifyUser(username.value.trim(), password.value)
+    user = await API.verifyUser(username.value.trim(), password.value, remember.value)
   } catch (e) {
     if (e.retryAfterSeconds) {
       const minutes = Math.ceil(e.retryAfterSeconds / 60)
@@ -77,10 +77,10 @@ async function submit() {
     return
   }
 
-  // "Remember me" no longer needs a client-held id — the backend's
-  // session cookie is what persists the sign-in (see api.js). `remember`
-  // is left as a UI-only preference for now (not wired to cookie
-  // lifetime); unchecking it does not shorten the session early.
+  // "Remember me" now controls the session cookie's own lifetime
+  // (see RememberAwareSessionMiddleware): checked keeps the 14-day
+  // cookie, unchecked makes it a browser-session cookie that's cleared
+  // when the browser closes -- important on a shared school PC.
 
   await store.signIn(user)
   router.push({ name: user.email_verified ? 'dashboard' : 'verify_email' })
@@ -133,7 +133,7 @@ function clearInvalid(field) {
           <input
             v-model="remember"
             type="checkbox"
-            title="When checked, the app opens the dashboard directly next time."
+            title="When checked, you'll stay signed in on this device for 14 days. Leave unchecked on a shared computer."
           > Remember me
         </label>
         <RouterLink
@@ -143,7 +143,7 @@ function clearInvalid(field) {
         >
           <button
             class="btn btn-secondary"
-            title="Reset your password using the saved security answer."
+            title="Reset your password using a code emailed to your account."
             @click="navigate"
           >
             Forgot password?
