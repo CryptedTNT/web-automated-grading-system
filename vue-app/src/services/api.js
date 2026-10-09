@@ -59,6 +59,30 @@ async function safeFetch(url, opts) {
   }
 }
 
+// FastAPI's own 422 validation errors carry `detail` as a list of
+// {msg, loc, ctx, ...} objects, not a string -- previously that fell
+// through to JSON.stringify(message) and showed the teacher a raw blob
+// like `[{"type":"value_error",...}]` instead of the validator's own
+// message (e.g. "Please use your lspu.edu.ph school email address.").
+// ctx.error is pydantic v2's own copy of a raise ValueError(...)'s text,
+// with none of msg's "Value error, " wrapper -- every validator in
+// schemas.py already writes a complete, teacher-facing sentence there.
+function errorMessage(data, fallback) {
+  const detail = data && data.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length) {
+    const texts = detail
+      .map((d) => {
+        if (d && typeof d.ctx?.error === 'string') return d.ctx.error
+        if (d && typeof d.msg === 'string') return d.msg.replace(/^Value error,\s*/i, '')
+        return null
+      })
+      .filter(Boolean)
+    if (texts.length) return texts.join(' ')
+  }
+  return fallback
+}
+
 async function request(method, path, body, signal) {
   const opts = {
     method,
@@ -77,8 +101,7 @@ async function request(method, path, body, signal) {
   }
   if (!res.ok) {
     if (handleIfSessionExpired(res, path)) return new Promise(() => {}) // navigation is already happening
-    const message = (data && data.detail) || `Request failed: ${method} ${path} (${res.status})`
-    const error = new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    const error = new Error(errorMessage(data, `Request failed: ${method} ${path} (${res.status})`))
     // 429s from the resend-code cooldown carry a standard Retry-After
     // header (see backend/app/routers/auth.py's _require_not_cooling_down)
     // so callers can drive a countdown instead of treating this as a
@@ -108,8 +131,7 @@ async function uploadFile(path, file) {
   }
   if (!res.ok) {
     if (handleIfSessionExpired(res, path)) return new Promise(() => {})
-    const message = (data && data.detail) || `Upload failed (${res.status})`
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    throw new Error(errorMessage(data, `Upload failed (${res.status})`))
   }
   return data
 }
@@ -159,9 +181,9 @@ export const API = {
       email,
     })
   },
-  async verifyUser(username, password) {
+  async verifyUser(username, password, rememberMe = false) {
     try {
-      return await post('/auth/login', { username, password })
+      return await post('/auth/login', { username, password, remember_me: rememberMe })
     } catch (e) {
       // A 429 here means the account is rate-limited, not that the
       // password was wrong -- let the caller tell those apart instead
