@@ -936,6 +936,20 @@ tr.qb-item-incomplete > td { background: #FFFBF2; }
 }
 .enum-blank-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 
+/* On a narrow phone this row's 5 controls (2 text inputs, Points,
+   Threshold %, remove button) squeezed into one unbreakable flex line,
+   shrinking the text inputs to near-zero width -- invisible, unusable
+   fields -- while Points/Threshold/remove ran off the right edge
+   needing a horizontal scroll. Same problem on the section-type
+   <select> above it: capped at 240px, it truncated to "True o",
+   "Identif" on a screen too narrow for that cap to make sense. */
+@media (max-width: 720px) {
+  .qb-section-header { flex-wrap: wrap; }
+  .qb-section-header select { max-width: none; flex: 1 1 160px; }
+  .enum-blank-row { flex-wrap: wrap; padding-left: 0; }
+  .enum-blank-row input[type="text"] { flex: 1 1 100%; min-width: 0; }
+}
+
 .settings-tabs {
   overflow-x: auto;
   scrollbar-width: thin;
