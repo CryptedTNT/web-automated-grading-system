@@ -20,21 +20,17 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BEAM_WIDTH = 4
 GREEDY_CONFIDENCE_FLOOR = 0.9
 
-# RunPod mounts an attached Network Volume at this fixed path. Without
-# a cache_dir pointed there, snapshot_download() below writes to the
-# ephemeral container filesystem, so a brand-new container (every cold
-# start, since workers scale to zero) re-downloads the whole model from
-# HF Hub -- the dominant chunk of this worker's cold-start time. Once a
-# volume is attached to the endpoint, the first cold start populates
-# this cache and every later one reuses it; with no volume attached
-# this stays None and behaves exactly as before (HF's own default
-# cache, no change in behavior).
-_NETWORK_VOLUME = "/runpod-volume"
-_HF_CACHE_DIR = None
-if os.path.isdir(_NETWORK_VOLUME):
-    _HF_CACHE_DIR = os.path.join(_NETWORK_VOLUME, "hf_cache")
-    os.makedirs(_HF_CACHE_DIR, exist_ok=True)
-    print(f"[startup] network volume found; caching model at {_HF_CACHE_DIR}", flush=True)
+# REVERTED 2026-10-10: a Network/Global Volume's shared cache_dir isn't
+# safe against concurrent cold starts. The backend fires up to
+# RUNPOD_OCR_CONCURRENCY (3) requests at once, so multiple brand-new
+# workers each ran snapshot_download() against the SAME cache path on
+# the SAME volume at the SAME time. HF Hub's cache layout uses symlinks
+# from the snapshot dir to blob files, and that isn't atomic/safe across
+# simultaneous writers on a shared network filesystem -- it corrupted
+# the cache (config.json ended up unreadable), and every worker reading
+# it afterward crash-looped on the same broken file. Back to each
+# container's own ephemeral cache (slower per cold start, but correct)
+# until a concurrency-safe caching scheme replaces this.
 
 try:
     model_repo = os.environ.get("HTR_MODEL_REPO", "").strip()
@@ -42,13 +38,12 @@ try:
         from huggingface_hub import snapshot_download
         if not os.environ.get("HF_TOKEN"):
             raise RuntimeError("Set HF_TOKEN using a RunPod Secret to access the private model")
-        print("[startup] fetching private model snapshot (cached after the first cold start if a volume is attached)", flush=True)
+        print("[startup] downloading private model snapshot", flush=True)
         MODEL_DIR = snapshot_download(
             repo_id=model_repo,
             revision=os.environ.get("HTR_MODEL_REVISION", "main"),
             token=os.environ["HF_TOKEN"],
             allow_patterns=["*.json", "*.safetensors"],
-            cache_dir=_HF_CACHE_DIR,
         )
     print(f"[startup] loading processor from {MODEL_DIR}", flush=True)
     _processor = AutoProcessor.from_pretrained(MODEL_DIR, local_files_only=True)
