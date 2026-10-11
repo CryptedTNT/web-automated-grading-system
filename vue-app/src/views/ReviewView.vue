@@ -86,12 +86,9 @@ const activeStudent = computed(() => results.value.find((r) => r.id === activeRe
 const items = ref([])
 const loadingItems = ref(false)
 const notice = ref('')
-const action = ref('override')
-const manualAnswer = ref('')
+const action = ref('')
 const manualScore = ref('')
 const savingReview = ref(false)
-const invalid = ref(false)
-const manualInput = ref(null)
 const cropMissing = ref(false)
 
 const flaggedItems = computed(() =>
@@ -108,14 +105,9 @@ const autoStatus = computed(() =>
 function resetItemForm() {
   // No action pre-selected: a flagged item needs a deliberate teacher
   // decision, so the form must not be one accidental click away from
-  // applying anything. The manual-answer box, if the teacher does pick
-  // Override, starts from what was actually extracted -- never from the
-  // answer key's own correct answer, which would let an unedited click
-  // silently award full credit regardless of what the student wrote.
+  // applying anything.
   action.value = ''
-  manualAnswer.value = currentItem.value?.student_answer || ''
   manualScore.value = currentItem.value?.earned ?? 0
-  invalid.value = false
   cropMissing.value = false
 }
 
@@ -193,7 +185,7 @@ async function saveOverride() {
 
   notice.value = ''
   if (!action.value) {
-    await showMessage('Choose an Action', 'Select Accept, Mark as Incorrect, Override, or Award Manual Points before saving.')
+    await showMessage('Choose an Action', 'Select Accept, Mark as Incorrect, or Award Manual Points before saving.')
     return
   }
   // The backend validates awarded points against the question maximum
@@ -204,22 +196,12 @@ async function saveOverride() {
     updates = { override_action: 'accepted_correct' }
   } else if (action.value === 'wrong') {
     updates = { override_action: 'marked_incorrect' }
-  } else if (action.value === 'score') {
+  } else {
     if (!validManualScore(manualScore.value, item.points)) {
       await showMessage('Invalid Points', `Enter points from 0 to ${item.points}, with at most two decimal places.`)
       return
     }
     updates = { override_action: 'manual_score_override', awarded_score: Number(manualScore.value) }
-  } else {
-    const answer = manualAnswer.value.trim()
-    invalid.value = false
-    if (!answer) {
-      invalid.value = true
-      await showMessage('Manual Answer Required', 'Enter the corrected answer before saving.')
-      manualInput.value?.focus()
-      return
-    }
-    updates = { student_answer: answer, override_action: 'manual_answer_override' }
   }
 
   savingReview.value = true
@@ -230,6 +212,14 @@ async function saveOverride() {
     await loadItems()
     await loadResults()
     if (currentItem.value) notice.value = 'Review saved. The next flagged item for this student is ready.'
+    // Moving to the next flagged item (or the "all done" screen) keeps the
+    // same route, so App.vue's route-change scroll reset never fires here --
+    // without this, a teacher on mobile can save and land on a new item
+    // without any visible change if they were scrolled down, making it look
+    // like nothing happened.
+    requestAnimationFrame(() => {
+      document.getElementById('pages-container')?.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    })
   } catch (error) {
     await showMessage('Could Not Save Review', error.message || 'Please try again.')
   } finally {
@@ -387,20 +377,7 @@ function openFullResult() {
           <div class="radio-group">
             <label><input v-model="action" type="radio" value="accept"> Accept as correct</label>
             <label><input v-model="action" type="radio" value="wrong"> Mark as incorrect</label>
-            <label><input v-model="action" type="radio" value="override"> Override extracted answer</label>
             <label><input v-model="action" type="radio" value="score"> Award Manual Points / Partial Credit</label>
-          </div>
-
-          <div class="form-group mt-14">
-            <label class="form-label" for="rev-override">Manual Answer</label>
-            <input
-              id="rev-override"
-              ref="manualInput"
-              v-model="manualAnswer"
-              type="text"
-              :class="{ invalid }"
-              :disabled="action !== 'override'"
-            >
           </div>
 
           <div v-if="action === 'score'" class="form-group mt-14">
