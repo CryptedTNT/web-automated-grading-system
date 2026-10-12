@@ -2,8 +2,10 @@
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import os
 
-# Keep the limit conservative: three RunPod workers, not one pool per teacher.
-OCR_CONCURRENCY = max(1, min(3, int(os.getenv("RUNPOD_OCR_CONCURRENCY", "1"))))
+# Keep the limit conservative: five RunPod workers, not one pool per teacher.
+# RunPod's own endpoint max workers must be raised to match, or requests
+# past its limit just queue there instead of here.
+OCR_CONCURRENCY = max(1, min(5, int(os.getenv("RUNPOD_OCR_CONCURRENCY", "1"))))
 _executor = ThreadPoolExecutor(max_workers=OCR_CONCURRENCY, thread_name_prefix="ocr")
 
 
