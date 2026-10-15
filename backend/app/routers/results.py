@@ -162,6 +162,27 @@ def session_results(
     return [_sheet_shape(r, identity.get(r.sheet_id)) for r in rows]
 
 
+@router.get("/sessions/{session_id}/flagged-items")
+def session_flagged_items(
+    session_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)
+):
+    """Item number + question type for every flagged item in this session,
+    one row per item. Lets Review Flagged's student list show what is
+    actually flagged (e.g. "#5 True or False, #12 Enumeration") instead of
+    only a count -- without a teacher opening each student to find out.
+    """
+    _owned_session_id(session_id, faculty, db)
+    rows = db.scalars(
+        select(VFlaggedQueue)
+        .where(VFlaggedQueue.session_id == session_id)
+        .order_by(VFlaggedQueue.sheet_id, VFlaggedQueue.item_no)
+    )
+    return [
+        {"sheet_id": row.sheet_id, "item_no": row.item_no, "type": row.question_type_label}
+        for row in rows
+    ]
+
+
 @router.get("/sheets/{sheet_id}")
 def sheet_result(sheet_id: int, faculty: Faculty = Depends(get_current_faculty), db: Session = Depends(get_db)):
     _owned_sheet_id(sheet_id, faculty, db)
@@ -298,6 +319,34 @@ def sheet_items(sheet_id: int, faculty: Faculty = Depends(get_current_faculty), 
     _owned_sheet_id(sheet_id, faculty, db)
     rows = db.scalars(select(VResultItem).where(VResultItem.sheet_id == sheet_id).order_by(VResultItem.item_no))
     return [_item_shape(r) for r in rows]
+
+
+@router.get("/sheets/{sheet_id}/identity-crop")
+def sheet_identity_crop(
+    sheet_id: int,
+    field: str = "name",
+    faculty: Faculty = Depends(get_current_faculty),
+    db: Session = Depends(get_db),
+):
+    """Serves the cropped handwriting for the name or section field, so a
+    teacher can check what was actually written -- not just the OCR's
+    reading of it -- especially when the extracted name doesn't match
+    anyone on the roster. pipeline.py names these deterministically
+    (`{sheet_code}_item0_{field}.png`) and never records the path in the
+    database the way an answer's crop_path is, so it's reconstructed from
+    the sheet's own code rather than read back from a column.
+    """
+    if field not in ("name", "section"):
+        raise HTTPException(status_code=400, detail="field must be 'name' or 'section'.")
+    sheet = db.get(ExamSheet, _owned_sheet_id(sheet_id, faculty, db))
+    if sheet is None:
+        raise HTTPException(status_code=404, detail="Sheet not found.")
+
+    crop_path = (settings.crop_dir / f"session_{sheet.session_id}" / f"{sheet.sheet_code}_item0_{field}.png").resolve()
+    crop_root = settings.crop_dir.resolve()
+    if not crop_path.is_file() or not crop_path.is_relative_to(crop_root):
+        raise HTTPException(status_code=404, detail="Cropped image file is missing.")
+    return FileResponse(crop_path, media_type="image/png")
 
 
 @router.get("/sessions/{session_id}/next-flagged")

@@ -204,7 +204,7 @@ async function submit() {
         </div>
       </template>
 
-      <div class="flex gap-8">
+      <div class="flex gap-8 flex-wrap">
         <RouterLink v-slot="{ navigate }" :to="{ name: 'login' }" custom>
           <button class="btn btn-secondary" title="Return to login." @click="navigate">Cancel</button>
         </RouterLink>

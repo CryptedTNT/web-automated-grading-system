@@ -718,7 +718,7 @@ function selectTheme(key) {
             instead of the fixed 50 above; a score of zero becomes that base and a perfect score is still 100.
           </span>
         </label>
-        <div v-if="gradingScale === 'custom'" class="flex gap-8 items-center mt-8" style="margin-left: 26px;">
+        <div v-if="gradingScale === 'custom'" class="flex gap-8 items-center mt-8 flex-wrap" style="margin-left: 26px;">
           <label for="custom-base">Base score</label>
           <input
             id="custom-base"

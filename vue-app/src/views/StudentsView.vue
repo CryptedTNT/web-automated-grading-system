@@ -366,7 +366,7 @@ async function importFromExcel(event) {
             <template v-if="editingSectionId === section.section_id">
               <label class="sr-only" :for="`rename-section-${section.section_id}`">Section name</label>
               <input :id="`rename-section-${section.section_id}`" v-model="editingSectionName" type="text" maxlength="50">
-              <div class="flex gap-8 mt-8">
+              <div class="flex gap-8 mt-8 flex-wrap">
                 <button type="button" class="btn btn-primary btn-small" @click="saveRenameSection(section)">Save</button>
                 <button type="button" class="btn btn-secondary btn-small" @click="editingSectionId = null">Cancel</button>
               </div>
@@ -376,7 +376,7 @@ async function importFromExcel(event) {
                 <strong>{{ section.name }}</strong>
                 <span class="muted-text">{{ section.student_count }} student(s)</span>
               </div>
-              <div class="flex gap-8 mt-8">
+              <div class="flex gap-8 mt-8 flex-wrap">
                 <button type="button" class="btn btn-secondary btn-small" @click.stop="startRenameSection(section)">Rename</button>
                 <button type="button" class="btn btn-danger btn-small" @click.stop="removeSection(section)">Delete</button>
               </div>
@@ -521,7 +521,16 @@ async function importFromExcel(event) {
 </template>
 
 <style scoped>
-.students-layout { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; align-items: start; }
+/* minmax(0, 1fr), not plain 1fr -- a grid track's implicit min-width is
+   auto, meaning it won't shrink below its content's intrinsic minimum. A
+   long student name in the table on the right was enough to push this
+   whole card past the viewport at tablet widths (768px, just above the
+   single-column breakpoint below) with no way to reach the rest of it --
+   not even a horizontal scrollbar, since html/body are overflow:hidden.
+   minmax(0, 1fr) lets the track shrink to the gap/sidebar's actual need,
+   so the card's own .table-wrapper (overflow-x: auto) handles any
+   remaining overflow by scrolling, as it already does elsewhere. */
+.students-layout { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .section-list { list-style: none; padding: 0; margin: 0; margin-top: 14px; display: grid; gap: 10px; }
 /* The whole card is the selection control now (role="button" in the
    template), not just the name/count text -- clicking anywhere except
@@ -533,7 +542,14 @@ async function importFromExcel(event) {
 .section-select { width: 100%; text-align: left; color: inherit; display: grid; gap: 2px; }
 .notice { border-left: 4px solid currentColor; padding: 8px 12px; }
 .records-box { min-width: 320px; max-width: 720px; width: 100%; }
-@media (max-width: 760px) {
+/* 960px, not 760px: matches .workflow-layout's breakpoint for the same
+   sidebar-card + main-card shape (Build a Questionnaire, etc). The
+   persistent app nav sidebar eats a fixed chunk of the viewport
+   regardless of its width, so the content area left for this grid at,
+   say, 768px is actually narrower than the raw viewport width suggests
+   -- confirmed by measurement: minmax(0, 1fr) alone wasn't enough at
+   768px, the second column still only had ~158px to work with. */
+@media (max-width: 960px) {
   .students-layout { grid-template-columns: 1fr; }
 }
 </style>

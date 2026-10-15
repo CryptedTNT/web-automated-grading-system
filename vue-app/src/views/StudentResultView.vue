@@ -8,7 +8,7 @@
 
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { API } from '@/services/api.js'
+import { API, BASE } from '@/services/api.js'
 import { useAppStore } from '@/stores/app.js'
 import { showMessage, showConfirm } from '@/services/dialog.js'
 import { canonicalSection } from '@/services/studentDirectory.js'
@@ -56,6 +56,17 @@ async function savePoints() {
   }
 }
 const typeScores = computed(() => scoreByType(items.value))
+
+/* The actual handwriting for the name field, not just the OCR's reading
+   of it -- so a teacher can tell at a glance whether an "unmatched" name
+   is a real roster gap or just a misread, the same crop-next-to-text
+   check Review Flagged already does for answers. Resets per result so a
+   missing crop on one sheet doesn't linger as "missing" after navigating
+   to the next, and re-shows once a real image URL loads. */
+const nameCropMissing = ref(false)
+const nameCropUrl = computed(() => (result.value ? `${BASE}/sheets/${result.value.id}/identity-crop?field=name` : ''))
+watch(() => result.value?.id, () => { nameCropMissing.value = false })
+
 const editingIdentity = ref(false)
 const savingIdentity = ref(false)
 const identityForm = ref({ name: '', section: '' })
@@ -320,10 +331,20 @@ async function saveIdentity() {
     <section v-if="result.roster_status || !result.roster_id" class="card roster-check-card" aria-labelledby="roster-check-title">
       <div class="card-title" id="roster-check-title">Name Check</div>
       <p class="muted-text">{{ rosterStatusText }}</p>
-      <div class="results-summary">
-        <span><strong>Recognized name:</strong> {{ result.detected_name || 'Unreadable' }}</span>
-        <span v-if="result.roster_id"><strong>Student on list:</strong> {{ rosterName }}</span>
-        <span v-if="result.roster_score != null"><strong>Similarity:</strong> {{ Math.round(result.roster_score) }}%</span>
+      <div class="name-check-body">
+        <img
+          v-if="!nameCropMissing"
+          :key="nameCropUrl"
+          :src="nameCropUrl"
+          alt="Scanned handwriting for this student's name"
+          class="name-check-crop"
+          @error="nameCropMissing = true"
+        >
+        <div class="results-summary">
+          <span><strong>Recognized name:</strong> {{ result.detected_name || 'Unreadable' }}</span>
+          <span v-if="result.roster_id"><strong>Student on list:</strong> {{ rosterName }}</span>
+          <span v-if="result.roster_score != null"><strong>Similarity:</strong> {{ Math.round(result.roster_score) }}%</span>
+        </div>
       </div>
       <div class="workflow-actions mt-8 flex gap-8 flex-wrap">
         <button
@@ -470,4 +491,13 @@ async function saveIdentity() {
 .type-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .type-score { padding: 14px; border: 1px solid rgba(128,128,128,0.3); border-radius: 10px; }
 .type-score strong { display: block; font-size: 1.3rem; margin: 8px 0; }
+.name-check-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; margin-top: 8px; }
+.name-check-crop {
+  display: block;
+  max-width: 260px;
+  max-height: 100px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: #FFFFFF;
+}
 </style>

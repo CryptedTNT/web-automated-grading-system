@@ -1215,7 +1215,7 @@ onMounted(reload)
           </span>
         </div>
 
-        <div class="flex gap-8 mt-8 items-center">
+        <div class="flex gap-8 mt-8 items-center flex-wrap">
           <button class="btn btn-secondary" title="Preview and print this questionnaire." @click="previewQuestionnaire">
             Preview / Print Questionnaire
           </button>

@@ -885,6 +885,20 @@ table input, table select {
   gap: 8px;
   margin-bottom: 10px;
 }
+/* The question-text input defaults to width:100% (see the global
+   input[type=text] rule), which fights a flex row that also has a fixed-
+   width index, warning icon, and delete button -- the input claims full
+   width before its siblings get a share, pushing the delete button past
+   the card's edge with no way to reach it (not even a horizontal
+   scrollbar, since html/body are overflow:hidden). flex:1/min-width:0
+   lets it shrink instead. Reproduced at 1024px with a real question
+   loaded; not visible at 1440px (enough room) or on mobile (narrow
+   enough that the input's own min-content width happens to concede
+   space first). */
+.mc-card-header input[type="text"], .enum-group-header input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
 .qb-section-header {
   display: flex;
   align-items: center;
@@ -930,24 +944,36 @@ tr.qb-item-incomplete > td { background: #FFFBF2; }
 .enum-blank-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 6px 0;
   padding-left: 28px;
 }
 .enum-blank-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+/* This row packs 2 text inputs, 2 labeled number inputs, and a remove
+   button -- more than fits on one line once the sidebar narrows this
+   card (e.g. a 1024px window, not just mobile: the Points/Threshold
+   labels alone already approach the row's available width). flex-wrap
+   above lets it break across lines instead of pushing the remove button
+   past the edge with no way to reach it (no horizontal scrollbar either,
+   since html/body are overflow:hidden); flex-basis here gives each text
+   input a sane target width to wrap at rather than squeezing to zero
+   first. Proven at mobile widths before this was generalized to apply
+   everywhere, not just <=720px. */
+.enum-blank-row input[type="text"] {
+  flex: 1 1 200px;
+  min-width: 0;
+}
 
-/* On a narrow phone this row's 5 controls (2 text inputs, Points,
-   Threshold %, remove button) squeezed into one unbreakable flex line,
-   shrinking the text inputs to near-zero width -- invisible, unusable
-   fields -- while Points/Threshold/remove ran off the right edge
-   needing a horizontal scroll. Same problem on the section-type
-   <select> above it: capped at 240px, it truncated to "True o",
-   "Identif" on a screen too narrow for that cap to make sense. */
+/* Narrower still (a real phone, not just a narrow desktop window): drop
+   the indent entirely so wrapped rows aren't fighting for space with it
+   too. Same problem on the section-type <select> above it: capped at
+   240px, it truncated to "True o", "Identif" on a screen too narrow for
+   that cap to make sense. */
 @media (max-width: 720px) {
   .qb-section-header { flex-wrap: wrap; }
   .qb-section-header select { max-width: none; flex: 1 1 160px; }
-  .enum-blank-row { flex-wrap: wrap; padding-left: 0; }
-  .enum-blank-row input[type="text"] { flex: 1 1 100%; min-width: 0; }
+  .enum-blank-row { padding-left: 0; }
 }
 
 .settings-tabs {

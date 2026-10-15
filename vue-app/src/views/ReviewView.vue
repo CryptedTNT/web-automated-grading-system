@@ -50,13 +50,38 @@ async function loadSessions() {
   }
 }
 
+const flaggedItemsBySheet = ref(new Map())
+
 async function loadResults() {
   loadingList.value = true
   try {
-    results.value = sessionId.value ? await API.studentResults(sessionId.value) : []
+    if (sessionId.value) {
+      const [rows, flaggedItems] = await Promise.all([
+        API.studentResults(sessionId.value),
+        API.sessionFlaggedItems(sessionId.value),
+      ])
+      results.value = rows
+      const bySheet = new Map()
+      for (const item of flaggedItems) {
+        if (!bySheet.has(item.sheet_id)) bySheet.set(item.sheet_id, [])
+        bySheet.get(item.sheet_id).push(item)
+      }
+      flaggedItemsBySheet.value = bySheet
+    } else {
+      results.value = []
+      flaggedItemsBySheet.value = new Map()
+    }
   } finally {
     loadingList.value = false
   }
+}
+
+/* "#5 True or False, #12 Enumeration" for the student list -- what's
+   flagged, not just how many, so a teacher can tell at a glance whether
+   it's worth opening before clicking Review. */
+function flaggedSummary(resultId) {
+  const items = flaggedItemsBySheet.value.get(resultId) || []
+  return items.map((item) => `#${item.item_no} ${item.type}`).join(', ')
 }
 
 function toNumber(value) {
@@ -262,7 +287,7 @@ function openFullResult() {
         <table>
           <thead>
             <tr>
-              <th>Student Name</th><th>Section</th><th>Flagged Items</th><th>Action</th>
+              <th>Student Name</th><th>Section</th><th>Flagged Items</th><th>Questions</th><th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -270,6 +295,7 @@ function openFullResult() {
               <td>{{ student.student_name || 'Unknown' }}</td>
               <td>{{ canonicalSection(student.section) }}</td>
               <td>{{ toNumber(student.flagged_count) }}</td>
+              <td class="flagged-questions-cell">{{ flaggedSummary(student.id) }}</td>
               <td>
                 <button class="btn btn-primary btn-small" @click="openStudent(student.id)">
                   Review
@@ -277,7 +303,7 @@ function openFullResult() {
               </td>
             </tr>
             <tr v-if="!loadingList && !flaggedStudents.length">
-              <td colspan="4" class="table-empty">
+              <td colspan="5" class="table-empty">
                 {{ sessionId ? 'No flagged answers in this exam.' : 'No exam selected.' }}
               </td>
             </tr>
@@ -394,3 +420,13 @@ function openFullResult() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.flagged-questions-cell {
+  max-width: 320px;
+  white-space: normal;
+  word-break: break-word;
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+</style>

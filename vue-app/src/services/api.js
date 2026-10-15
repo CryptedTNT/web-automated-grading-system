@@ -344,6 +344,9 @@ export const API = {
     // instead) — return [] rather than guess an endpoint shape.
     return []
   },
+  async sessionFlaggedItems(sessionId) {
+    return get(`/sessions/${sessionId}/flagged-items`)
+  },
   async getStudentResultById(id) {
     try {
       return await get(`/sheets/${id}`)
